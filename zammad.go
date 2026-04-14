@@ -165,6 +165,39 @@ func (z *ZammadBridge) ZammadLookupUser(phone string) (int, error) {
 	return 0, nil
 }
 
+// ZammadCreateUser creates a new user in Zammad with the given phone number
+func (z *ZammadBridge) ZammadCreateUser(phone string) (int, error) {
+	user := map[string]interface{}{
+		"firstname": phone,
+		"lastname":  "3CX",
+		"phone":     phone,
+	}
+	body, _ := json.Marshal(user)
+
+	req, err := http.NewRequest("POST", z.Config.Zammad.ApiUrl+"/api/v1/users", bytes.NewBuffer(body))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Token token="+z.Config.Zammad.ApiToken)
+
+	resp, err := z.ClientZammad.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return 0, fmt.Errorf("user creation failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var result ZammadUserSearchResult
+	json.Unmarshal(respBody, &result)
+	log.Info().Int("user_id", result.ID).Str("phone", phone).Msg("Created Zammad user")
+	return result.ID, nil
+}
+
 // ZammadCreateTicket creates a ticket in Zammad for the completed call
 func (z *ZammadBridge) ZammadCreateTicket(call *CallInformation, cause string) error {
 	group := z.Config.Zammad.TicketGroup
@@ -207,7 +240,14 @@ func (z *ZammadBridge) ZammadCreateTicket(call *CallInformation, cause string) e
 	if customerID > 0 {
 		ticket.CustomerID = customerID
 	} else {
-		ticket.Customer = call.CallFrom
+		// Create customer first
+		newID, createErr := z.ZammadCreateUser(call.CallFrom)
+		if createErr != nil {
+			log.Warn().Err(createErr).Str("phone", call.CallFrom).Msg("Failed to create Zammad user, using default")
+			ticket.CustomerID = 1
+		} else {
+			ticket.CustomerID = newID
+		}
 	}
 
 	requestBody, err := json.Marshal(ticket)
