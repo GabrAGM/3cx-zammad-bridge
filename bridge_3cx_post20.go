@@ -80,23 +80,17 @@ type Client3CXPost20 struct {
 }
 
 func (z *Client3CXPost20) FetchCalls() ([]CallInformation, error) {
-	// If we call someone, we get some entity like this:
-	// {"level":"debug","entity":"{\"id\":8107,\"status\":\"Dialing\",\"dn\":\"150\",\"party_caller_name\":\"\",\"party_dn\":\"10007\",\"party_caller_id\":\"0123456789\",\"party_did\":\"\",\"device_id\":\"sip:150@127.0.0.1:5063\",\"party_dn_type\":\"Wexternalline\",\"direct_control\":false,\"originated_by_dn\":\"\",\"originated_by_type\":\"None\",\"referred_by_dn\":\"\",\"referred_by_type\":\"None\",\"on_behalf_of_dn\":\"\",\"on_behalf_of_type\":\"None\",\"callid\":1265,\"legid\":1}","sequence":18,"event_type":0,"time":"2024-12-30T15:12:40+01:00","message":"Received from 3CX WS"}
-	// If we receive a call, we get some entity like this:
-	// {"level":"debug","entity":"{\"id\":8106,\"status\":\"Ringing\",\"dn\":\"150\",\"party_caller_name\":\"+49123456789\",\"party_dn\":\"10007\",\"party_caller_id\":\"0123456789\",\"party_did\":\"\",\"device_id\":\"sip:150@127.0.0.1:5483;rinstance=c2a75fd2f1caea71\",\"party_dn_type\":\"Wexternalline\",\"direct_control\":false,\"originated_by_dn\":\"ROUTER\",\"originated_by_type\":\"Wroutepoint\",\"referred_by_dn\":\"\",\"referred_by_type\":\"None\",\"on_behalf_of_dn\":\"\",\"on_behalf_of_type\":\"None\",\"callid\":1264,\"legid\":4}","sequence":15,"event_type":0,"time":"2024-12-30T15:11:48+01:00","message":"Received from 3CX WS"}
-
-	values := url.Values{}
-	req, err := http.NewRequest(http.MethodGet, z.Config.Phone3CX.Host+"/callcontrol?"+values.Encode(), nil)
+	// Use XAPI ActiveCalls endpoint which shows ALL system calls (requires admin auth)
+	req, err := http.NewRequest(http.MethodGet, z.Config.Phone3CX.Host+"/xapi/v1/ActiveCalls", nil)
 	if err != nil {
 		return nil, fmt.Errorf("unable to prepare HTTP request: %w", err)
 	}
 
 	req.Header.Set("Authorization", "Bearer "+z.accessToken)
 
-	// Request to /api/GroupList and then look for the name
 	resp, err := z.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("unable to request group list: %w", err)
+		return nil, fmt.Errorf("unable to request active calls: %w", err)
 	}
 
 	defer resp.Body.Close()
@@ -106,8 +100,8 @@ func (z *Client3CXPost20) FetchCalls() ([]CallInformation, error) {
 		log.Debug().
 			Str("response", string(data)).
 			Interface("headers", resp.Header).
-			Msg("Received group list response")
-		return nil, fmt.Errorf("unexpected response fetching 3CX group info (HTTP %d): %s", resp.StatusCode, string(data))
+			Msg("Received active calls response")
+		return nil, fmt.Errorf("unexpected response fetching active calls (HTTP %d): %s", resp.StatusCode, string(data))
 	}
 
 	respBody, err := io.ReadAll(resp.Body)
@@ -115,50 +109,59 @@ func (z *Client3CXPost20) FetchCalls() ([]CallInformation, error) {
 		return nil, fmt.Errorf("unable to read response body: %w", err)
 	}
 
-	var callControlResponse CallControlResponse
-	err = json.Unmarshal(respBody, &callControlResponse)
+	var activeCallsResponse struct {
+		Value []CallInformation `json:"value"`
+	}
+	err = json.Unmarshal(respBody, &activeCallsResponse)
 	if err != nil {
 		return nil, fmt.Errorf("unable to parse response JSON: %w", err)
 	}
 
+	// Parse Caller/Callee strings to extract numbers and names
+	// Format: "extension Name (phone)" or "10000 Sip Trunk WE (phone)"
+	for i := range activeCallsResponse.Value {
+		call := &activeCallsResponse.Value[i]
+		call.CallerName, call.CallerNumber = parseCallParty(call.Caller)
+		call.CalleeName, call.CalleeNumber = parseCallParty(call.Callee)
+	}
+
 	log.Trace().
-		Interface("response", callControlResponse).
-		Msg("Received call control response")
+		Interface("response", activeCallsResponse.Value).
+		Msg("Received active calls response")
 
-	return z.aggregateCallResponse(callControlResponse), nil
+	return activeCallsResponse.Value, nil
 }
 
-func (z *Client3CXPost20) convertParticipant(participant CallParticipant, dn string) CallInformation {
-	if participant.Status == "Connected" {
-		participant.Status = "Talking" // This is the pre v20 status
+// parseCallParty extracts name and phone number from "ext Name (phone)" format
+func parseCallParty(party string) (string, string) {
+	if party == "" {
+		return "", ""
 	}
-
-	return CallInformation{
-		ID: json.Number(strconv.Itoa(participant.CallID)),
-		// CallUID: strconv.Itoa(participant.CallID),
-
-		Status:       participant.Status,
-		CallerNumber: participant.PartyDN,
-		CallerName:   participant.PartyCallerName + " (" + participant.PartyCallerID + ")", // This would now be of the format "(+491234567890)"
-		CalleeNumber: participant.DN,
-		CalleeName:   "",
-		AgentNumber:  dn,
-
-		LastChangeStatus: time.Now(),
-		EstablishedAt:    time.Now(), // Not quite correct ...
-	}
-}
-
-func (z *Client3CXPost20) aggregateCallResponse(response CallControlResponse) []CallInformation {
-	var calls []CallInformation
-	for _, entry := range response {
-		for _, participant := range entry.Participants {
-			calls = append(calls, z.convertParticipant(participant, entry.DN))
+	// Look for pattern: "something (number)"
+	openParen := strings.LastIndex(party, "(")
+	closeParen := strings.LastIndex(party, ")")
+	if openParen > 0 && closeParen > openParen {
+		number := party[openParen+1 : closeParen]
+		name := strings.TrimSpace(party[:openParen])
+		// Remove leading extension number from name (e.g., "134 Maya Mohamed" -> "Maya Mohamed")
+		parts := strings.SplitN(name, " ", 2)
+		if len(parts) == 2 {
+			// Check if first part is a number (extension)
+			if _, err := strconv.Atoi(parts[0]); err == nil {
+				name = parts[1]
+			}
 		}
+		return name, number
 	}
-
-	return calls
+	// No parentheses - might be just "ext Name"
+	parts := strings.SplitN(party, " ", 2)
+	if len(parts) == 2 {
+		return parts[1], parts[0]
+	}
+	return party, party
 }
+
+// convertParticipant and aggregateCallResponse removed - now using XAPI ActiveCalls
 
 // listenWS makes a Websocket connection to 3CX to "immediately" get updates on calls. This is a blocking function.
 //
