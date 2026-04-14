@@ -192,16 +192,13 @@ func (z *ZammadBridge) ProcessCall(call *CallInformation) error {
 }
 
 // isInboundCall checks whether the given call is an inbound call.
+// An inbound call has an external caller (longer number) and an internal callee (extension-length).
 func (z *ZammadBridge) isInboundCall(call *CallInformation) bool {
-	if len(call.CallerNumber) != z.Config.Phone3CX.TrunkDigits {
+	if len(call.CallerNumber) <= z.Config.Phone3CX.ExtensionDigits {
 		return false
 	}
 
-	if len(call.CalleeNumber) != z.Config.Phone3CX.ExtensionDigits {
-		return false
-	}
-
-	if !z.Client3CX.IsExtension(call.CalleeNumber) {
+	if len(call.CalleeNumber) > z.Config.Phone3CX.ExtensionDigits {
 		return false
 	}
 
@@ -209,16 +206,13 @@ func (z *ZammadBridge) isInboundCall(call *CallInformation) bool {
 }
 
 // isOutboundCall checks whether the given call is an outbound call.
+// An outbound call has an internal caller (extension-length) and an external callee (longer number).
 func (z *ZammadBridge) isOutboundCall(call *CallInformation) bool {
-	if len(call.CallerNumber) != z.Config.Phone3CX.ExtensionDigits {
+	if len(call.CallerNumber) > z.Config.Phone3CX.ExtensionDigits {
 		return false
 	}
 
-	if len(call.CalleeNumber) != z.Config.Phone3CX.TrunkDigits {
-		return false
-	}
-
-	if !z.Client3CX.IsExtension(call.CallerNumber) {
+	if len(call.CalleeNumber) <= z.Config.Phone3CX.ExtensionDigits {
 		return false
 	}
 
