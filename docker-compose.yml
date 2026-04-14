@@ -4,7 +4,7 @@ services:
     container_name: 3cx-zammad-bridge
     restart: always
     volumes:
-      - //e/3cx-zammad-bridge/config.yaml:/etc/zammadbridge/config.yaml
+      - //e/3cx-zammad-bridge/config.yaml:/etc/3cx-zammad-bridge/config.yaml
     networks:
       - zammad_default
 

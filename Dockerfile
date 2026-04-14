@@ -9,4 +9,4 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /zammadbridge /usr/local/bin/zammadbridge
 ENTRYPOINT ["zammadbridge"]
-CMD ["-config", "/etc/zammadbridge/config.yaml", "-f", "plain"]
+CMD ["-f", "plain"]
