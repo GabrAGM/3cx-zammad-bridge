@@ -27,6 +27,10 @@ type Config struct {
 	Zammad struct {
 		Endpoint            string `yaml:"endpoint"`
 		LogMissedQueueCalls bool   `yaml:"log_missed_queue_calls"`
+		ApiUrl              string `yaml:"api_url"`
+		ApiToken            string `yaml:"api_token"`
+		AutoCreateTicket    bool   `yaml:"auto_create_ticket"`
+		TicketGroup         string `yaml:"ticket_group"`
 	} `yaml:"Zammad"`
 }
 
