@@ -146,14 +146,14 @@ func (z *ZammadBridge) ProcessCall(call *CallInformation) error {
 		call.Direction = "Outbound"
 		call.AgentNumber = call.CallerNumber
 		call.AgentName = call.CallerName
-		call.ExternalNumber = z.ParsePhoneNumber(call.CalleeNumber + " " + call.CalleeName)
+		call.ExternalNumber = z.ParsePhoneNumber(call.CalleeNumber)
 		call.CallTo = call.ExternalNumber
 		call.CallFrom = call.AgentNumber
 	} else if z.isInboundCall(call) {
 		call.Direction = "Inbound"
 		call.AgentNumber = call.CalleeNumber
 		call.AgentName = call.CalleeName
-		call.ExternalNumber = z.ParsePhoneNumber(call.CallerNumber + " " + call.CallerName)
+		call.ExternalNumber = z.ParsePhoneNumber(call.CallerNumber)
 		call.CallTo = call.AgentNumber
 		call.CallFrom = call.ExternalNumber
 	} else {
