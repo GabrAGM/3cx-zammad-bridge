@@ -480,47 +480,58 @@ func (z *Client3CXPost20) AuthenticateRetry(maxOffline time.Duration) error {
 // of a call. Names are "First Last" when available, with a fallback to the
 // raw Number.
 func (z *Client3CXPost20) FetchExtensions() ([]Extension, error) {
-	// $top=1000 is an OData hint; 3CX defaults to 100. Larger deployments
-	// would need pagination, but AGM's dial-plan stays well under 1000.
-	req, err := http.NewRequest(http.MethodGet,
-		z.Config.Phone3CX.Host+"/xapi/v1/Users?$select=Number,FirstName,LastName&$top=1000", nil)
-	if err != nil {
-		return nil, fmt.Errorf("unable to prepare HTTP request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+z.accessToken)
-
-	resp, err := z.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("unable to fetch extensions: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("unexpected response fetching extensions (HTTP %d): %s", resp.StatusCode, string(data))
-	}
-
-	var payload struct {
-		Value []struct {
-			Number    string `json:"Number"`
-			FirstName string `json:"FirstName"`
-			LastName  string `json:"LastName"`
-		} `json:"value"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("unable to parse extensions JSON: %w", err)
-	}
-
-	out := make([]Extension, 0, len(payload.Value))
-	for _, u := range payload.Value {
-		if u.Number == "" {
-			continue
+	// 3CX v20 XAPI caps $top at 100 per page, so we paginate with $skip until
+	// a page returns fewer than pageSize items. Bounded at 20 pages (2,000
+	// extensions) to protect against misconfigured dial-plans.
+	var out []Extension
+	const pageSize = 100
+	for page := 0; page < 20; page++ {
+		url := fmt.Sprintf("%s/xapi/v1/Users?$select=Number,FirstName,LastName&$top=%d&$skip=%d",
+			z.Config.Phone3CX.Host, pageSize, page*pageSize)
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("unable to prepare HTTP request: %w", err)
 		}
-		name := strings.TrimSpace(u.FirstName + " " + u.LastName)
-		if name == "" {
-			name = u.Number
+		req.Header.Set("Authorization", "Bearer "+z.accessToken)
+
+		resp, err := z.client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("unable to fetch extensions (page %d): %w", page, err)
 		}
-		out = append(out, Extension{Number: u.Number, Name: name})
+
+		if resp.StatusCode >= 300 {
+			data, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("unexpected response fetching extensions (HTTP %d): %s", resp.StatusCode, string(data))
+		}
+
+		var payload struct {
+			Value []struct {
+				Number    string `json:"Number"`
+				FirstName string `json:"FirstName"`
+				LastName  string `json:"LastName"`
+			} `json:"value"`
+		}
+		err = json.NewDecoder(resp.Body).Decode(&payload)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("unable to parse extensions JSON: %w", err)
+		}
+
+		for _, u := range payload.Value {
+			if u.Number == "" {
+				continue
+			}
+			name := strings.TrimSpace(u.FirstName + " " + u.LastName)
+			if name == "" {
+				name = u.Number
+			}
+			out = append(out, Extension{Number: u.Number, Name: name})
+		}
+
+		if len(payload.Value) < pageSize {
+			break
+		}
 	}
 	return out, nil
 }
