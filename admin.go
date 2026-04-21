@@ -147,8 +147,10 @@ function sortSelect(sel) {
 function updateShuttleCounts() {
   const a = document.getElementById('available-select');
   const s = document.getElementById('selected-select');
-  if (a) document.getElementById('available-count').textContent = a.options.length + ' extensions';
-  if (s) document.getElementById('selected-count').textContent = s.options.length + ' selected';
+  const ac = document.getElementById('available-count');
+  const sc = document.getElementById('selected-count');
+  if (a && ac) ac.textContent = a.options.length + ' extensions';
+  if (s && sc) sc.textContent = s.options.length + ' selected';
 }
 function selectAllInSelected() {
   const s = document.getElementById('selected-select');
@@ -240,7 +242,7 @@ if (document.readyState === 'loading') {
           <button type="button" onclick="shuttleMove('selected-select','available-select', true)" title="Clear the filter list">⇐</button>
         </div>
         <div class="pane">
-          <div class="pane-title" id="selected-title">Filter list</div>
+          <div class="pane-title"><span id="selected-title">Filter list</span> <span class="pane-count" id="selected-count"></span></div>
           <input type="text" placeholder="Search selected…" oninput="shuttleFilter('selected-select', this.value)">
           <select id="selected-select" name="extension_filter" multiple ondblclick="shuttleMove('selected-select','available-select')">
             {{range .Extensions}}{{if index $.ExtListMap .Number}}
