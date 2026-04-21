@@ -13,10 +13,11 @@ func (z *ZammadBridge) ShouldAutoCreate(call *CallInformation) bool {
 	if call == nil {
 		return false
 	}
-	if !matchesDirection(z.Config.Zammad.AutoCreateDirections, call.Direction) {
+	s := z.GetAutoCreateSettings()
+	if !matchesDirection(s.Directions, call.Direction) {
 		return false
 	}
-	if !matchesExtension(z.Config.Zammad.ExtensionFilterMode, z.Config.Zammad.ExtensionFilter, call.AgentNumber) {
+	if !matchesExtension(s.ExtMode, s.ExtList, call.AgentNumber) {
 		return false
 	}
 	return true

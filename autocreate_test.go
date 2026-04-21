@@ -7,7 +7,9 @@ func newBridgeWithZammad(directions, extMode string, extList []string) *ZammadBr
 	cfg.Zammad.AutoCreateDirections = directions
 	cfg.Zammad.ExtensionFilterMode = extMode
 	cfg.Zammad.ExtensionFilter = extList
-	return &ZammadBridge{Config: cfg}
+	b := &ZammadBridge{Config: cfg}
+	b.loadAutoCreateFromConfig()
+	return b
 }
 
 func TestShouldAutoCreate_NilCall(t *testing.T) {

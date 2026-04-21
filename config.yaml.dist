@@ -16,6 +16,15 @@ Bridge:
   queue_extension: 816
   country_prefix: 49
 
+Admin:
+  # Optional self-serve web UI for toggling auto-create settings.
+  # When enabled, a password-protected HTTP form listens on `listen` and
+  # rewrites the live config file + restarts the process on save.
+  enabled: false
+  listen: ":8090"
+  user: admin
+  pass: change-me
+
 Zammad:
   endpoint: https://zammad.example.com/api/v1/cti/secret
   log_missed_queue_calls: true

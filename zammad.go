@@ -129,7 +129,8 @@ func (z *ZammadBridge) ZammadHangup(call *CallInformation, cause string) error {
 	}
 
 	// Auto-create ticket if enabled and the call passes direction+extension filters
-	if z.Config.Zammad.AutoCreateTicket && z.Config.Zammad.ApiUrl != "" && z.Config.Zammad.ApiToken != "" {
+	settings := z.GetAutoCreateSettings()
+	if settings.Enabled && z.Config.Zammad.ApiUrl != "" && z.Config.Zammad.ApiToken != "" {
 		if z.ShouldAutoCreate(call) {
 			ticketErr := z.ZammadCreateTicket(call, cause)
 			if ticketErr != nil {
