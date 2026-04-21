@@ -475,6 +475,56 @@ func (z *Client3CXPost20) AuthenticateRetry(maxOffline time.Duration) error {
 	return nil
 }
 
+// FetchExtensions returns the full extension directory from 3CX v20's XAPI.
+// It covers users, queues and ring groups — anything that can be the target
+// of a call. Names are "First Last" when available, with a fallback to the
+// raw Number.
+func (z *Client3CXPost20) FetchExtensions() ([]Extension, error) {
+	// $top=1000 is an OData hint; 3CX defaults to 100. Larger deployments
+	// would need pagination, but AGM's dial-plan stays well under 1000.
+	req, err := http.NewRequest(http.MethodGet,
+		z.Config.Phone3CX.Host+"/xapi/v1/Users?$select=Number,FirstName,LastName&$top=1000", nil)
+	if err != nil {
+		return nil, fmt.Errorf("unable to prepare HTTP request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+z.accessToken)
+
+	resp, err := z.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("unable to fetch extensions: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("unexpected response fetching extensions (HTTP %d): %s", resp.StatusCode, string(data))
+	}
+
+	var payload struct {
+		Value []struct {
+			Number    string `json:"Number"`
+			FirstName string `json:"FirstName"`
+			LastName  string `json:"LastName"`
+		} `json:"value"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("unable to parse extensions JSON: %w", err)
+	}
+
+	out := make([]Extension, 0, len(payload.Value))
+	for _, u := range payload.Value {
+		if u.Number == "" {
+			continue
+		}
+		name := strings.TrimSpace(u.FirstName + " " + u.LastName)
+		if name == "" {
+			name = u.Number
+		}
+		out = append(out, Extension{Number: u.Number, Name: name})
+	}
+	return out, nil
+}
+
 func (z *Client3CXPost20) IsExtension(_ string) bool {
 	// In v20 and above, we are only shown the extensions we are monitoring.
 	// Therefore, we can assume that if we are monitoring an extension, it is valid.

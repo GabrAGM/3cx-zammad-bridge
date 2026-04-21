@@ -27,6 +27,12 @@ type ZammadBridge struct {
 	// idiom: the pointed-to value is immutable once stored — writers must
 	// build a new AutoCreateSettings and Store it rather than mutate.
 	autoCreate atomic.Pointer[AutoCreateSettings]
+
+	// extensionCache and extensionCacheAt power the admin-UI extension
+	// picker. The TTL keeps the 3CX XAPI from being hammered on every
+	// page load (admin traffic is rare but renders can spam on refresh).
+	extensionCache   atomic.Pointer[[]Extension]
+	extensionCacheAt atomic.Int64 // unix nano of last successful fetch
 }
 
 // AutoCreateSettings is an immutable snapshot of the mutable auto-create
@@ -61,6 +67,38 @@ func (z *ZammadBridge) SetAutoCreateSettings(s AutoCreateSettings) {
 		ExtList:    append([]string(nil), s.ExtList...),
 	}
 	z.autoCreate.Store(snapshot)
+}
+
+const extensionCacheTTL = 5 * time.Minute
+
+// GetExtensions returns the cached extension directory, fetching from 3CX
+// when the cache is stale or empty. Errors are returned to the caller so the
+// admin UI can render a degraded view (freeform list) rather than a broken
+// picker.
+func (z *ZammadBridge) GetExtensions() ([]Extension, error) {
+	if cached := z.extensionCache.Load(); cached != nil {
+		ageNanos := time.Now().UnixNano() - z.extensionCacheAt.Load()
+		if ageNanos < int64(extensionCacheTTL) {
+			return *cached, nil
+		}
+	}
+
+	if z.Client3CX == nil {
+		return nil, fmt.Errorf("3CX client not initialized")
+	}
+
+	extensions, err := z.Client3CX.FetchExtensions()
+	if err != nil {
+		// Return a stale cache if we have one — better than nothing for the UI.
+		if cached := z.extensionCache.Load(); cached != nil {
+			return *cached, err
+		}
+		return nil, err
+	}
+
+	z.extensionCache.Store(&extensions)
+	z.extensionCacheAt.Store(time.Now().UnixNano())
+	return extensions, nil
 }
 
 // loadAutoCreateFromConfig seeds autoCreate from the Zammad config section.

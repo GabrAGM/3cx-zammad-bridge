@@ -92,7 +92,17 @@ button:hover { background: #0256c7; }
 .banner.error { background: #ffd7d7; color: #86181d; }
 code { background: #eef1f4; padding: 1px 5px; border-radius: 3px; font-size: .85em; }
 .current { font-size: .85rem; color: #555; margin-top: .3rem; }
+select[multiple] { min-height: 240px; font-family: monospace; }
 </style>
+<script>
+function filterExtensions(q) {
+  q = q.trim().toLowerCase();
+  const opts = document.querySelectorAll('#ext-select option');
+  opts.forEach(o => {
+    o.hidden = q && !o.textContent.toLowerCase().includes(q);
+  });
+}
+</script>
 </head>
 <body>
 <h1>3CX → Zammad bridge <small>auto-create settings</small></h1>
@@ -127,8 +137,20 @@ code { background: #eef1f4; padding: 1px 5px; border-radius: 3px; font-size: .85
       </select>
     </label>
 
-    <label>Extensions (one per line)
-      <textarea name="extension_filter" placeholder="908&#10;909&#10;910">{{.ExtList}}</textarea>
+    <label>Extensions
+      {{if .ExtensionsError}}<div class="hint" style="color:#86181d">Could not load 3CX extension directory ({{.ExtensionsError}}) — using the numbers that are already on file.</div>{{end}}
+      {{if .Extensions}}
+        <input type="text" id="ext-filter" placeholder="Filter by number or name…" oninput="filterExtensions(this.value)" style="margin-bottom:.4rem">
+        <select name="extension_filter" multiple size="12" id="ext-select">
+          {{range .Extensions}}
+          <option value="{{.Number}}"{{if index $.ExtListMap .Number}} selected{{end}}>{{.Number}} — {{.Name}}</option>
+          {{end}}
+        </select>
+        <div class="hint">Hold Ctrl/Cmd (or Shift for ranges) to select multiple. {{len .Extensions}} extensions loaded from 3CX.</div>
+      {{else}}
+        <textarea name="extension_filter" placeholder="908&#10;909&#10;910">{{.ExtList}}</textarea>
+        <div class="hint">One per line. Directory lookup from 3CX was not available, so you're editing the list directly.</div>
+      {{end}}
       <div class="hint">Ignored when mode is "All". Match is on the agent side of the call (the 3CX extension that answered an inbound or placed an outbound).</div>
     </label>
   </div>
@@ -146,13 +168,16 @@ type adminView struct {
 	AutoCreateTicket bool
 	Directions       string
 	ExtMode          string
-	ExtList          string
+	ExtList          string          // newline-separated — used only by textarea fallback
+	ExtListMap       map[string]bool // numbers currently in filter, used by multi-select
+	Extensions       []Extension     // from 3CX directory
+	ExtensionsError  string          // set when directory fetch failed
 	ConfigPath       string
 	Message          string
 	MessageKind      string
 }
 
-func viewFromSettings(s AutoCreateSettings, configPath, message, kind string) adminView {
+func viewFromSettings(s AutoCreateSettings, extensions []Extension, extensionsErr error, configPath, message, kind string) adminView {
 	dir := strings.ToLower(strings.TrimSpace(s.Directions))
 	if dir == "" {
 		dir = "all"
@@ -161,11 +186,22 @@ func viewFromSettings(s AutoCreateSettings, configPath, message, kind string) ad
 	if mode == "" {
 		mode = "all"
 	}
+	selected := make(map[string]bool, len(s.ExtList))
+	for _, e := range s.ExtList {
+		selected[e] = true
+	}
+	errStr := ""
+	if extensionsErr != nil {
+		errStr = extensionsErr.Error()
+	}
 	return adminView{
 		AutoCreateTicket: s.Enabled,
 		Directions:       dir,
 		ExtMode:          mode,
 		ExtList:          strings.Join(s.ExtList, "\n"),
+		ExtListMap:       selected,
+		Extensions:       extensions,
+		ExtensionsError:  errStr,
 		ConfigPath:       configPath,
 		Message:          message,
 		MessageKind:      kind,
@@ -179,8 +215,9 @@ func adminIndexHandler(bridge *ZammadBridge, configPath string) http.HandlerFunc
 			http.NotFound(w, r)
 			return
 		}
+		extensions, extErr := bridge.GetExtensions()
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_ = tmpl.Execute(w, viewFromSettings(bridge.GetAutoCreateSettings(), configPath, "", ""))
+		_ = tmpl.Execute(w, viewFromSettings(bridge.GetAutoCreateSettings(), extensions, extErr, configPath, "", ""))
 	}
 }
 
@@ -196,11 +233,26 @@ func adminSaveHandler(bridge *ZammadBridge, configPath string) http.HandlerFunc 
 			return
 		}
 
+		// Multi-select submits one entry per picked option; textarea
+		// fallback submits a single entry with embedded newlines. Both
+		// shapes parse through parseExtList.
+		rawExts := r.Form["extension_filter"]
+		var extList []string
+		if len(rawExts) > 1 {
+			for _, e := range rawExts {
+				if v := strings.TrimSpace(e); v != "" {
+					extList = append(extList, v)
+				}
+			}
+		} else if len(rawExts) == 1 {
+			extList = parseExtList(rawExts[0])
+		}
+
 		newSettings := AutoCreateSettings{
 			Enabled:    r.FormValue("auto_create_ticket") == "true",
 			Directions: strings.ToLower(strings.TrimSpace(r.FormValue("auto_create_directions"))),
 			ExtMode:    strings.ToLower(strings.TrimSpace(r.FormValue("extension_filter_mode"))),
-			ExtList:    parseExtList(r.FormValue("extension_filter")),
+			ExtList:    extList,
 		}
 
 		if !validDirection(newSettings.Directions) {
@@ -240,15 +292,17 @@ func adminSaveHandler(bridge *ZammadBridge, configPath string) http.HandlerFunc 
 			Msg("Admin UI applied new auto-create settings")
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_ = tmpl.Execute(w, viewFromSettings(bridge.GetAutoCreateSettings(), configPath,
+		extensions, extErr := bridge.GetExtensions()
+		_ = tmpl.Execute(w, viewFromSettings(bridge.GetAutoCreateSettings(), extensions, extErr, configPath,
 			"Saved. New settings are active now — future calls will use them.", "success"))
 	}
 }
 
 func writeError(w http.ResponseWriter, tmpl *template.Template, bridge *ZammadBridge, configPath, msg string) {
+	extensions, extErr := bridge.GetExtensions()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusBadRequest)
-	_ = tmpl.Execute(w, viewFromSettings(bridge.GetAutoCreateSettings(), configPath, msg, "error"))
+	_ = tmpl.Execute(w, viewFromSettings(bridge.GetAutoCreateSettings(), extensions, extErr, configPath, msg, "error"))
 }
 
 func basicAuthUser(r *http.Request) string {
