@@ -189,10 +189,26 @@ func TestAdminIndexRenders(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	// Look for the selected inbound option regardless of how html/template
-	// renders the bare `selected` attribute (it may emit `selected=""`).
-	if !strings.Contains(body, `value="inbound"`) || !strings.Contains(body, "selected") {
-		t.Errorf("missing inbound/selected markers in HTML:\n%s", body)
+	// Inbound toggle must be checked (directions=inbound, enabled=true).
+	if !strings.Contains(body, `name="inbound"`) {
+		t.Errorf("missing inbound checkbox")
+	}
+	if !strings.Contains(body, `name="outbound"`) {
+		t.Errorf("missing outbound checkbox")
+	}
+	// Crude check: the inbound input must have "checked", outbound must not.
+	inboundIdx := strings.Index(body, `name="inbound"`)
+	outboundIdx := strings.Index(body, `name="outbound"`)
+	if inboundIdx < 0 || outboundIdx < 0 {
+		t.Fatalf("checkbox inputs not found")
+	}
+	inboundTag := body[max(0, inboundIdx-80):inboundIdx+80]
+	outboundTag := body[max(0, outboundIdx-80):outboundIdx+80]
+	if !strings.Contains(inboundTag, "checked") {
+		t.Errorf("inbound toggle should be checked, got: %s", inboundTag)
+	}
+	if strings.Contains(outboundTag, "checked") {
+		t.Errorf("outbound toggle should not be checked, got: %s", outboundTag)
 	}
 	if !strings.Contains(body, `value="exclude"`) {
 		t.Errorf("missing exclude option")
@@ -202,15 +218,13 @@ func TestAdminIndexRenders(t *testing.T) {
 	}
 }
 
-func TestAdminSaveRejectsInvalidDirection(t *testing.T) {
+func TestAdminSaveRejectsInvalidFilterMode(t *testing.T) {
 	path := writeTmpConfig(t, "Zammad:\n  auto_create_ticket: true\n")
 	bridge := testBridgeFromFile(t, path)
 
 	form := url.Values{}
-	form.Set("auto_create_ticket", "true")
-	form.Set("auto_create_directions", "garbage")
-	form.Set("extension_filter_mode", "all")
-	form.Set("extension_filter", "")
+	form.Set("inbound", "on")
+	form.Set("extension_filter_mode", "garbage")
 
 	req := httptest.NewRequest("POST", "/save", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -218,7 +232,52 @@ func TestAdminSaveRejectsInvalidDirection(t *testing.T) {
 	adminSaveHandler(bridge, path)(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 on bad direction, got %d", rec.Code)
+		t.Fatalf("expected 400 on bad filter mode, got %d", rec.Code)
+	}
+}
+
+func TestAdminSaveCheckboxesMapToDirections(t *testing.T) {
+	cases := []struct {
+		name          string
+		inbound, out  bool
+		wantEnabled   bool
+		wantDirection string
+	}{
+		{"both on -> all", true, true, true, "all"},
+		{"inbound only", true, false, true, "inbound"},
+		{"outbound only", false, true, true, "outbound"},
+		{"both off -> none + disabled", false, false, false, "none"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeTmpConfig(t, "Zammad: {}\n")
+			bridge := testBridgeFromFile(t, path)
+
+			form := url.Values{}
+			if tc.inbound {
+				form.Set("inbound", "on")
+			}
+			if tc.out {
+				form.Set("outbound", "on")
+			}
+			form.Set("extension_filter_mode", "all")
+
+			req := httptest.NewRequest("POST", "/save", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			rec := httptest.NewRecorder()
+			adminSaveHandler(bridge, path)(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+			}
+			got := bridge.GetAutoCreateSettings()
+			if got.Enabled != tc.wantEnabled {
+				t.Errorf("Enabled = %v, want %v", got.Enabled, tc.wantEnabled)
+			}
+			if got.Directions != tc.wantDirection {
+				t.Errorf("Directions = %q, want %q", got.Directions, tc.wantDirection)
+			}
+		})
 	}
 }
 
@@ -233,8 +292,7 @@ func TestAdminSaveHotSwapsBridge(t *testing.T) {
 	}
 
 	form := url.Values{}
-	form.Set("auto_create_ticket", "true")
-	form.Set("auto_create_directions", "inbound")
+	form.Set("inbound", "on")
 	form.Set("extension_filter_mode", "exclude")
 	form.Set("extension_filter", "908\n909\n")
 

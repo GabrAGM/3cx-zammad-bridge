@@ -103,6 +103,14 @@ select[multiple] { min-height: 260px; font-family: monospace; }
 .shuttle-buttons button { margin: 0; padding: .3rem .6rem; font-size: .85rem; background: #eef1f4; color: #222; border: 1px solid #d1d5da; }
 .shuttle-buttons button:hover { background: #d1d5da; }
 .pane-count { font-size: .75rem; color: #888; }
+.direction-toggles { margin-top: .3rem; }
+.toggle-row { padding: .4rem 0; }
+.switch-label { display: inline-flex; align-items: center; gap: .5rem; cursor: pointer; font-weight: normal; }
+.switch-label input[type=checkbox] { width: 38px; height: 22px; appearance: none; background: #cbd1d8; border-radius: 11px; position: relative; cursor: pointer; transition: background .15s; outline: none; border: none; margin: 0; }
+.switch-label input[type=checkbox]:checked { background: #2ea043; }
+.switch-label input[type=checkbox]::before { content: ""; position: absolute; left: 2px; top: 2px; width: 18px; height: 18px; background: #fff; border-radius: 50%; transition: left .15s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+.switch-label input[type=checkbox]:checked::before { left: 18px; }
+.switch-text { font-size: .95rem; }
 </style>
 <script>
 function shuttleFilter(id, q) {
@@ -182,22 +190,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
 <form method="POST" action="/save">
   <div class="card">
-    <label>Master toggle
-      <select name="auto_create_ticket">
-        <option value="true"  {{if .AutoCreateTicket}}selected{{end}}>Enabled — create Zammad tickets on hangup</option>
-        <option value="false" {{if not .AutoCreateTicket}}selected{{end}}>Disabled — do not create tickets at all</option>
-      </select>
-      <div class="hint">When disabled, the bridge still forwards live CTI events to Zammad but never touches the /tickets endpoint.</div>
-    </label>
-
-    <label>Call directions to auto-create for
-      <select name="auto_create_directions">
-        <option value="all"      {{if eq .Directions "all"}}selected{{end}}>All — inbound and outbound</option>
-        <option value="inbound"  {{if eq .Directions "inbound"}}selected{{end}}>Inbound only</option>
-        <option value="outbound" {{if eq .Directions "outbound"}}selected{{end}}>Outbound only</option>
-        <option value="none"     {{if eq .Directions "none"}}selected{{end}}>None — skip every call</option>
-      </select>
-    </label>
+    <div class="direction-toggles">
+      <div class="toggle-row">
+        <label class="switch-label">
+          <input type="checkbox" name="inbound" value="on" {{if .InboundOn}}checked{{end}}>
+          <span class="switch-text">Create tickets for <b>Inbound</b> calls</span>
+        </label>
+      </div>
+      <div class="toggle-row">
+        <label class="switch-label">
+          <input type="checkbox" name="outbound" value="on" {{if .OutboundOn}}checked{{end}}>
+          <span class="switch-text">Create tickets for <b>Outbound</b> calls</span>
+        </label>
+      </div>
+      <div class="hint">Untick both to fully stop ticket creation — the bridge still forwards live CTI events to Zammad but never touches the /tickets endpoint.</div>
+    </div>
 
     <label>Extension filter mode
       <select name="extension_filter_mode">
@@ -254,16 +261,16 @@ document.addEventListener('DOMContentLoaded', () => {
 </html>`
 
 type adminView struct {
-	AutoCreateTicket bool
-	Directions       string
-	ExtMode          string
-	ExtList          string          // newline-separated — used only by textarea fallback
-	ExtListMap       map[string]bool // numbers currently in filter, used by multi-select
-	Extensions       []Extension     // from 3CX directory
-	ExtensionsError  string          // set when directory fetch failed
-	ConfigPath       string
-	Message          string
-	MessageKind      string
+	InboundOn       bool
+	OutboundOn      bool
+	ExtMode         string
+	ExtList         string          // newline-separated — used only by textarea fallback
+	ExtListMap      map[string]bool // numbers currently in filter, used by multi-select
+	Extensions      []Extension     // from 3CX directory
+	ExtensionsError string          // set when directory fetch failed
+	ConfigPath      string
+	Message         string
+	MessageKind     string
 }
 
 func viewFromSettings(s AutoCreateSettings, extensions []Extension, extensionsErr error, configPath, message, kind string) adminView {
@@ -271,6 +278,8 @@ func viewFromSettings(s AutoCreateSettings, extensions []Extension, extensionsEr
 	if dir == "" {
 		dir = "all"
 	}
+	inbound := s.Enabled && (dir == "all" || dir == "inbound" || dir == "both" || dir == "in")
+	outbound := s.Enabled && (dir == "all" || dir == "outbound" || dir == "both" || dir == "out")
 	mode := strings.ToLower(strings.TrimSpace(s.ExtMode))
 	if mode == "" {
 		mode = "all"
@@ -298,16 +307,16 @@ func viewFromSettings(s AutoCreateSettings, extensions []Extension, extensionsEr
 		errStr = extensionsErr.Error()
 	}
 	return adminView{
-		AutoCreateTicket: s.Enabled,
-		Directions:       dir,
-		ExtMode:          mode,
-		ExtList:          strings.Join(s.ExtList, "\n"),
-		ExtListMap:       selected,
-		Extensions:       extensions,
-		ExtensionsError:  errStr,
-		ConfigPath:       configPath,
-		Message:          message,
-		MessageKind:      kind,
+		InboundOn:       inbound,
+		OutboundOn:      outbound,
+		ExtMode:         mode,
+		ExtList:         strings.Join(s.ExtList, "\n"),
+		ExtListMap:      selected,
+		Extensions:      extensions,
+		ExtensionsError: errStr,
+		ConfigPath:      configPath,
+		Message:         message,
+		MessageKind:     kind,
 	}
 }
 
@@ -351,9 +360,27 @@ func adminSaveHandler(bridge *ZammadBridge, configPath string) http.HandlerFunc 
 			extList = parseExtList(rawExts[0])
 		}
 
+		inboundOn := r.FormValue("inbound") != ""
+		outboundOn := r.FormValue("outbound") != ""
+
+		var directions string
+		switch {
+		case inboundOn && outboundOn:
+			directions = "all"
+		case inboundOn:
+			directions = "inbound"
+		case outboundOn:
+			directions = "outbound"
+		default:
+			directions = "none"
+		}
+
 		newSettings := AutoCreateSettings{
-			Enabled:    r.FormValue("auto_create_ticket") == "true",
-			Directions: strings.ToLower(strings.TrimSpace(r.FormValue("auto_create_directions"))),
+			// The master "Enabled" flag mirrors "any direction is on". If both
+			// toggles are off, no call can auto-create, so we also record
+			// Enabled=false so the log line + persisted YAML match intent.
+			Enabled:    inboundOn || outboundOn,
+			Directions: directions,
 			ExtMode:    strings.ToLower(strings.TrimSpace(r.FormValue("extension_filter_mode"))),
 			ExtList:    extList,
 		}
