@@ -190,6 +190,20 @@ func viewFromSettings(s AutoCreateSettings, extensions []Extension, extensionsEr
 	for _, e := range s.ExtList {
 		selected[e] = true
 	}
+	// If a currently-filtered number isn't in the directory (e.g. 3CX
+	// returned an error or the extension was removed from 3CX), synthesize
+	// a placeholder option so it stays visible + selectable.
+	if len(extensions) > 0 {
+		known := make(map[string]bool, len(extensions))
+		for _, e := range extensions {
+			known[e.Number] = true
+		}
+		for _, e := range s.ExtList {
+			if !known[e] {
+				extensions = append(extensions, Extension{Number: e, Name: "(not in directory)"})
+			}
+		}
+	}
 	errStr := ""
 	if extensionsErr != nil {
 		errStr = extensionsErr.Error()
