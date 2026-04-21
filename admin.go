@@ -6,7 +6,6 @@ import (
 	"html/template"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -285,32 +284,20 @@ func parseExtList(raw string) []string {
 	return out
 }
 
-// writeConfigYAML marshals the config back to YAML and writes it atomically
-// to the given path (write + rename, same directory) so a crashing process
-// cannot leave a truncated file.
+// writeConfigYAML marshals the config back to YAML and writes it to the
+// given path. We cannot use the usual write+rename atomic pattern because
+// the config file is typically bind-mounted into the container as a single
+// file — Docker's mount holds the inode and rename(2) fails with EBUSY.
+// Instead, we open the existing file O_TRUNC and write in place. For a
+// small YAML (~1 KB) this is near-instantaneous; the narrow crash window
+// is acceptable for this use case.
 func writeConfigYAML(path string, cfg *Config) error {
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".config.yaml.*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temp: %w", err)
-	}
-	tmpName := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("write temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("close temp: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("rename: %w", err)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write: %w", err)
 	}
 	return nil
 }
