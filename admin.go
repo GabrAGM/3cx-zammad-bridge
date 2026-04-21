@@ -172,14 +172,20 @@ function updateModeLabel() {
     label.textContent = 'Mode is currently "All", so the filter list is ignored.';
   }
 }
-document.addEventListener('DOMContentLoaded', () => {
+function initAdminUI() {
   updateShuttleCounts();
   updateModeLabel();
   const modeSel = document.querySelector('select[name="extension_filter_mode"]');
   if (modeSel) modeSel.addEventListener('change', updateModeLabel);
   const form = document.querySelector('form');
   if (form) form.addEventListener('submit', selectAllInSelected);
-});
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initAdminUI);
+} else {
+  // Document is already parsed (script may have been injected late) — init now.
+  initAdminUI();
+}
 </script>
 </head>
 <body>
