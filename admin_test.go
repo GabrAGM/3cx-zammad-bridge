@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeTmpConfig(t *testing.T, body string) string {
@@ -168,6 +169,14 @@ func testBridgeFromFile(t *testing.T, path string) *ZammadBridge {
 	}
 	b := &ZammadBridge{Config: cfg}
 	b.loadAutoCreateFromConfig()
+	// Seed a fake extension directory so tests exercise the real picker UI
+	// path instead of the textarea fallback.
+	exts := []Extension{
+		{Number: "100", Name: "Alpha"},
+		{Number: "908", Name: "LiveOps Cairo Queue"},
+	}
+	b.extensionCache.Store(&exts)
+	b.extensionCacheAt.Store(time.Now().UnixNano())
 	return b
 }
 

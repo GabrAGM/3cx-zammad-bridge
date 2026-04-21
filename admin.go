@@ -103,6 +103,7 @@ select[multiple] { min-height: 260px; font-family: monospace; }
 .shuttle-buttons button { margin: 0; padding: .3rem .6rem; font-size: .85rem; background: #eef1f4; color: #222; border: 1px solid #d1d5da; }
 .shuttle-buttons button:hover { background: #d1d5da; }
 .pane-count { font-size: .75rem; color: #888; }
+.inline-mode { width: auto; display: inline-block; font-size: .85rem; padding: 2px 6px; margin: 0 .2rem; font-weight: 600; }
 .direction-toggles { margin-top: .3rem; }
 .toggle-row { padding: .4rem 0; }
 .switch-label { display: inline-flex; align-items: center; gap: .5rem; cursor: pointer; font-weight: normal; }
@@ -160,18 +161,14 @@ function selectAllInSelected() {
 function updateModeLabel() {
   const modeSel = document.querySelector('select[name="extension_filter_mode"]');
   const label = document.getElementById('selected-label');
-  const title = document.getElementById('selected-title');
   if (!modeSel || !label) return;
   const m = modeSel.value;
   if (m === 'include') {
-    title.textContent = 'Included (only these extensions create tickets)';
-    label.textContent = 'Only calls on the extensions listed here will auto-create a ticket.';
+    label.textContent = 'Only calls on the extensions listed here will auto-create a ticket — everything else is ignored.';
   } else if (m === 'exclude') {
-    title.textContent = 'Excluded (these extensions never create tickets)';
     label.textContent = 'Calls on the extensions listed here are skipped; every other extension creates tickets normally.';
   } else {
-    title.textContent = 'Filter list (disabled — mode is "All")';
-    label.textContent = 'Mode is currently "All", so the filter list is ignored.';
+    label.textContent = 'Filter is currently off — every extension creates tickets.';
   }
 }
 function initAdminUI() {
@@ -214,14 +211,6 @@ if (document.readyState === 'loading') {
       <div class="hint">Untick both to fully stop ticket creation — the bridge still forwards live CTI events to Zammad but never touches the /tickets endpoint.</div>
     </div>
 
-    <label>Extension filter mode
-      <select name="extension_filter_mode">
-        <option value="all"     {{if eq .ExtMode "all"}}selected{{end}}>All — no filter, every agent extension</option>
-        <option value="include" {{if eq .ExtMode "include"}}selected{{end}}>Include — only the extensions listed below</option>
-        <option value="exclude" {{if eq .ExtMode "exclude"}}selected{{end}}>Exclude — every extension EXCEPT those listed</option>
-      </select>
-    </label>
-
     <label>Extensions</label>
     {{if .ExtensionsError}}<div class="hint" style="color:#86181d">Could not load 3CX extension directory ({{.ExtensionsError}}) — using the numbers that are already on file.</div>{{end}}
     {{if .Extensions}}
@@ -242,7 +231,15 @@ if (document.readyState === 'loading') {
           <button type="button" onclick="shuttleMove('selected-select','available-select', true)" title="Clear the filter list">⇐</button>
         </div>
         <div class="pane">
-          <div class="pane-title"><span id="selected-title">Filter list</span> <span class="pane-count" id="selected-count"></span></div>
+          <div class="pane-title">
+            Extensions that are
+            <select name="extension_filter_mode" class="inline-mode">
+              <option value="exclude" {{if eq .ExtMode "exclude"}}selected{{end}}>Excluded</option>
+              <option value="include" {{if eq .ExtMode "include"}}selected{{end}}>Included</option>
+              <option value="all"     {{if eq .ExtMode "all"}}selected{{end}}>Ignored (filter off)</option>
+            </select>
+            <span class="pane-count" id="selected-count"></span>
+          </div>
           <input type="text" placeholder="Search selected…" oninput="shuttleFilter('selected-select', this.value)">
           <select id="selected-select" name="extension_filter" multiple ondblclick="shuttleMove('selected-select','available-select')">
             {{range .Extensions}}{{if index $.ExtListMap .Number}}
