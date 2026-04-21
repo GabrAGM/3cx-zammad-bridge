@@ -92,16 +92,86 @@ button:hover { background: #0256c7; }
 .banner.error { background: #ffd7d7; color: #86181d; }
 code { background: #eef1f4; padding: 1px 5px; border-radius: 3px; font-size: .85em; }
 .current { font-size: .85rem; color: #555; margin-top: .3rem; }
-select[multiple] { min-height: 240px; font-family: monospace; }
+select[multiple] { min-height: 260px; font-family: monospace; }
+
+.shuttle { display: grid; grid-template-columns: 1fr auto 1fr; gap: .6rem; align-items: stretch; margin-top: .3rem; }
+.shuttle .pane { display: flex; flex-direction: column; gap: .3rem; min-width: 0; }
+.shuttle .pane input[type=text] { margin: 0; }
+.shuttle .pane select { flex: 1; min-height: 260px; width: 100%; box-sizing: border-box; }
+.shuttle .pane-title { font-size: .85rem; font-weight: 600; color: #555; }
+.shuttle-buttons { display: flex; flex-direction: column; justify-content: center; gap: .3rem; }
+.shuttle-buttons button { margin: 0; padding: .3rem .6rem; font-size: .85rem; background: #eef1f4; color: #222; border: 1px solid #d1d5da; }
+.shuttle-buttons button:hover { background: #d1d5da; }
+.pane-count { font-size: .75rem; color: #888; }
 </style>
 <script>
-function filterExtensions(q) {
+function shuttleFilter(id, q) {
   q = q.trim().toLowerCase();
-  const opts = document.querySelectorAll('#ext-select option');
-  opts.forEach(o => {
+  const sel = document.getElementById(id);
+  for (const o of sel.options) {
     o.hidden = q && !o.textContent.toLowerCase().includes(q);
-  });
+  }
 }
+function shuttleMove(fromId, toId, all) {
+  const from = document.getElementById(fromId);
+  const to = document.getElementById(toId);
+  const moving = [];
+  for (const o of Array.from(from.options)) {
+    if (o.hidden) continue;
+    if (all || o.selected) moving.push(o);
+  }
+  for (const o of moving) {
+    o.selected = false;
+    to.appendChild(o);
+  }
+  sortSelect(to);
+  updateShuttleCounts();
+}
+function sortSelect(sel) {
+  const opts = Array.from(sel.options);
+  opts.sort((a, b) => {
+    const na = parseInt(a.value, 10), nb = parseInt(b.value, 10);
+    if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
+    return a.value.localeCompare(b.value);
+  });
+  opts.forEach(o => sel.appendChild(o));
+}
+function updateShuttleCounts() {
+  const a = document.getElementById('available-select');
+  const s = document.getElementById('selected-select');
+  if (a) document.getElementById('available-count').textContent = a.options.length + ' extensions';
+  if (s) document.getElementById('selected-count').textContent = s.options.length + ' selected';
+}
+function selectAllInSelected() {
+  const s = document.getElementById('selected-select');
+  if (!s) return;
+  for (const o of s.options) o.selected = true;
+}
+function updateModeLabel() {
+  const modeSel = document.querySelector('select[name="extension_filter_mode"]');
+  const label = document.getElementById('selected-label');
+  const title = document.getElementById('selected-title');
+  if (!modeSel || !label) return;
+  const m = modeSel.value;
+  if (m === 'include') {
+    title.textContent = 'Included (only these extensions create tickets)';
+    label.textContent = 'Only calls on the extensions listed here will auto-create a ticket.';
+  } else if (m === 'exclude') {
+    title.textContent = 'Excluded (these extensions never create tickets)';
+    label.textContent = 'Calls on the extensions listed here are skipped; every other extension creates tickets normally.';
+  } else {
+    title.textContent = 'Filter list (disabled — mode is "All")';
+    label.textContent = 'Mode is currently "All", so the filter list is ignored.';
+  }
+}
+document.addEventListener('DOMContentLoaded', () => {
+  updateShuttleCounts();
+  updateModeLabel();
+  const modeSel = document.querySelector('select[name="extension_filter_mode"]');
+  if (modeSel) modeSel.addEventListener('change', updateModeLabel);
+  const form = document.querySelector('form');
+  if (form) form.addEventListener('submit', selectAllInSelected);
+});
 </script>
 </head>
 <body>
@@ -137,22 +207,41 @@ function filterExtensions(q) {
       </select>
     </label>
 
-    <label>Extensions
-      {{if .ExtensionsError}}<div class="hint" style="color:#86181d">Could not load 3CX extension directory ({{.ExtensionsError}}) — using the numbers that are already on file.</div>{{end}}
-      {{if .Extensions}}
-        <input type="text" id="ext-filter" placeholder="Filter by number or name…" oninput="filterExtensions(this.value)" style="margin-bottom:.4rem">
-        <select name="extension_filter" multiple size="12" id="ext-select">
-          {{range .Extensions}}
-          <option value="{{.Number}}"{{if index $.ExtListMap .Number}} selected{{end}}>{{.Number}} — {{.Name}}</option>
-          {{end}}
-        </select>
-        <div class="hint">Hold Ctrl/Cmd (or Shift for ranges) to select multiple. {{len .Extensions}} extensions loaded from 3CX.</div>
-      {{else}}
-        <textarea name="extension_filter" placeholder="908&#10;909&#10;910">{{.ExtList}}</textarea>
-        <div class="hint">One per line. Directory lookup from 3CX was not available, so you're editing the list directly.</div>
-      {{end}}
-      <div class="hint">Ignored when mode is "All". Match is on the agent side of the call (the 3CX extension that answered an inbound or placed an outbound).</div>
-    </label>
+    <label>Extensions</label>
+    {{if .ExtensionsError}}<div class="hint" style="color:#86181d">Could not load 3CX extension directory ({{.ExtensionsError}}) — using the numbers that are already on file.</div>{{end}}
+    {{if .Extensions}}
+      <div class="shuttle">
+        <div class="pane">
+          <div class="pane-title">Available <span class="pane-count" id="available-count"></span></div>
+          <input type="text" placeholder="Search by number or name…" oninput="shuttleFilter('available-select', this.value)">
+          <select id="available-select" multiple ondblclick="shuttleMove('available-select','selected-select')">
+            {{range .Extensions}}{{if not (index $.ExtListMap .Number)}}
+            <option value="{{.Number}}">{{.Number}} — {{.Name}}</option>
+            {{end}}{{end}}
+          </select>
+        </div>
+        <div class="shuttle-buttons">
+          <button type="button" onclick="shuttleMove('available-select','selected-select')" title="Move selected rows to the filter list">→</button>
+          <button type="button" onclick="shuttleMove('selected-select','available-select')" title="Move selected rows back to Available">←</button>
+          <button type="button" onclick="shuttleMove('available-select','selected-select', true)" title="Move all visible rows to the filter list">⇒</button>
+          <button type="button" onclick="shuttleMove('selected-select','available-select', true)" title="Clear the filter list">⇐</button>
+        </div>
+        <div class="pane">
+          <div class="pane-title" id="selected-title">Filter list</div>
+          <input type="text" placeholder="Search selected…" oninput="shuttleFilter('selected-select', this.value)">
+          <select id="selected-select" name="extension_filter" multiple ondblclick="shuttleMove('selected-select','available-select')">
+            {{range .Extensions}}{{if index $.ExtListMap .Number}}
+            <option value="{{.Number}}">{{.Number}} — {{.Name}}</option>
+            {{end}}{{end}}
+          </select>
+          <div class="hint" id="selected-label"></div>
+        </div>
+      </div>
+      <div class="hint">Double-click a row to move it across. The filter mode above controls whether the right-hand list is treated as an include-list or an exclude-list.</div>
+    {{else}}
+      <textarea name="extension_filter" placeholder="908&#10;909&#10;910">{{.ExtList}}</textarea>
+      <div class="hint">One per line. Directory lookup from 3CX was not available, so you're editing the list directly.</div>
+    {{end}}
   </div>
 
   <button type="submit">Save &amp; apply</button>
