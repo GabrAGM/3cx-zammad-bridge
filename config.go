@@ -31,6 +31,17 @@ type Config struct {
 		ApiToken            string `yaml:"api_token"`
 		AutoCreateTicket    bool   `yaml:"auto_create_ticket"`
 		TicketGroup         string `yaml:"ticket_group"`
+		// AutoCreateDirections controls which call directions trigger auto-creation
+		// of tickets (and users). Accepted values: "all", "inbound", "outbound", "none".
+		// Empty string defaults to "all" for backward compatibility.
+		AutoCreateDirections string `yaml:"auto_create_directions"`
+		// ExtensionFilterMode controls whether the extension filter list acts as an
+		// allow-list or deny-list. Accepted values: "all" (no filter), "include", "exclude".
+		// Empty string defaults to "all".
+		ExtensionFilterMode string `yaml:"extension_filter_mode"`
+		// ExtensionFilter lists the 3CX extensions (agent numbers) that the filter
+		// mode applies to. Ignored when mode is "all".
+		ExtensionFilter []string `yaml:"extension_filter"`
 	} `yaml:"Zammad"`
 }
 

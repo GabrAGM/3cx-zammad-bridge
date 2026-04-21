@@ -19,3 +19,26 @@ Bridge:
 Zammad:
   endpoint: https://zammad.example.com/api/v1/cti/secret
   log_missed_queue_calls: true
+
+  # --- Auto-create ticket + user on hangup ---
+  # Master toggle. When false, the bridge only forwards CTI events and never
+  # touches /tickets or /users.
+  auto_create_ticket: true
+  api_url: https://zammad.example.com
+  api_token: REPLACE_ME
+  ticket_group: Users
+
+  # Which call directions should trigger auto-creation of a ticket (and, if the
+  # caller is unknown, a Zammad user). One of: all | inbound | outbound | none.
+  # Default (empty) = all.
+  auto_create_directions: all
+
+  # Per-extension filter on the AGENT side of the call (i.e. the 3CX extension
+  # that answered an inbound call or placed an outbound one).
+  #   all     - no filtering (default)
+  #   include - only auto-create when the agent extension is in extension_filter
+  #   exclude - auto-create for every extension EXCEPT those in extension_filter
+  extension_filter_mode: all
+  extension_filter:
+    # - "100"
+    # - "101"
