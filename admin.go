@@ -77,41 +77,51 @@ const adminTmpl = `<!doctype html>
 <meta charset="utf-8">
 <title>3CX → Zammad bridge — auto-create settings</title>
 <style>
-body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #222; }
-h1 { font-size: 1.4rem; margin-bottom: .2rem; }
+*, *::before, *::after { box-sizing: border-box; }
+body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; max-width: 980px; margin: 2rem auto; padding: 0 1.5rem; color: #222; background: #f6f8fa; }
+h1 { font-size: 1.4rem; margin: 0 0 .2rem; }
 h1 small { color: #888; font-weight: normal; font-size: .8rem; }
-.card { border: 1px solid #e1e4e8; border-radius: 6px; padding: 1rem 1.2rem; margin-top: 1rem; background: #fafbfc; }
-label { display: block; margin-top: .8rem; font-weight: 600; }
-.hint { color: #666; font-weight: normal; font-size: .85rem; margin-top: .2rem; }
-select, textarea, input[type=text] { width: 100%; padding: .4rem .5rem; font-size: .95rem; border: 1px solid #d1d5da; border-radius: 4px; box-sizing: border-box; font-family: inherit; }
+.page-hint { color: #666; font-size: .85rem; margin: 0 0 1.2rem; }
+.hint { color: #666; font-weight: normal; font-size: .82rem; margin-top: .3rem; line-height: 1.4; }
+.section { background: #fff; border: 1px solid #e1e4e8; border-radius: 8px; padding: 1.2rem 1.4rem; margin-bottom: 1rem; }
+.section-title { font-size: .8rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #888; margin: 0 0 .8rem; }
+select, textarea, input[type=text] { width: 100%; padding: .4rem .5rem; font-size: .9rem; border: 1px solid #d1d5da; border-radius: 4px; font-family: inherit; background: #fff; }
+select:focus, textarea:focus, input[type=text]:focus { outline: none; border-color: #0366d6; box-shadow: 0 0 0 3px rgba(3,102,214,.15); }
 textarea { min-height: 120px; font-family: monospace; }
-button { margin-top: 1.2rem; padding: .5rem 1.2rem; font-size: 1rem; background: #0366d6; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
-button:hover { background: #0256c7; }
-.banner { padding: .6rem .9rem; border-radius: 4px; margin-bottom: 1rem; }
-.banner.success { background: #d1f5d3; color: #11591c; }
-.banner.error { background: #ffd7d7; color: #86181d; }
-code { background: #eef1f4; padding: 1px 5px; border-radius: 3px; font-size: .85em; }
-.current { font-size: .85rem; color: #555; margin-top: .3rem; }
-select[multiple] { min-height: 260px; font-family: monospace; }
+.actions { display: flex; align-items: center; gap: 1rem; margin-top: 1rem; }
+button[type=submit] { padding: .5rem 1.4rem; font-size: .95rem; font-weight: 600; background: #0366d6; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+button[type=submit]:hover { background: #0256c7; }
+.banner { padding: .6rem .9rem; border-radius: 6px; margin-bottom: 1rem; font-size: .9rem; }
+.banner.success { background: #d1f5d3; color: #0a6e1b; border: 1px solid #a8e6b0; }
+.banner.error   { background: #ffd7d7; color: #86181d; border: 1px solid #f5c5c5; }
+code { background: #eef1f4; padding: 1px 5px; border-radius: 3px; font-size: .82em; }
+.footer-meta { font-size: .8rem; color: #888; margin-top: .5rem; }
 
-.shuttle { display: grid; grid-template-columns: 1fr auto 1fr; gap: .6rem; align-items: stretch; margin-top: .3rem; }
-.shuttle .pane { display: flex; flex-direction: column; gap: .3rem; min-width: 0; }
-.shuttle .pane input[type=text] { margin: 0; }
-.shuttle .pane select { flex: 1; min-height: 260px; width: 100%; box-sizing: border-box; }
-.shuttle .pane-title { font-size: .85rem; font-weight: 600; color: #555; }
-.shuttle-buttons { display: flex; flex-direction: column; justify-content: center; gap: .3rem; }
-.shuttle-buttons button { margin: 0; padding: .3rem .6rem; font-size: .85rem; background: #eef1f4; color: #222; border: 1px solid #d1d5da; }
-.shuttle-buttons button:hover { background: #d1d5da; }
-.pane-count { font-size: .75rem; color: #888; }
-.inline-mode { width: auto; display: inline-block; font-size: .85rem; padding: 2px 6px; margin: 0 .2rem; font-weight: 600; }
-.direction-toggles { margin-top: .3rem; }
-.toggle-row { padding: .4rem 0; }
-.switch-label { display: inline-flex; align-items: center; gap: .5rem; cursor: pointer; font-weight: normal; }
-.switch-label input[type=checkbox] { width: 38px; height: 22px; appearance: none; background: #cbd1d8; border-radius: 11px; position: relative; cursor: pointer; transition: background .15s; outline: none; border: none; margin: 0; }
+/* Direction toggles */
+.toggle-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
+.toggle-row { display: flex; align-items: center; gap: .75rem; padding: .7rem 1rem; border: 1px solid #e1e4e8; border-radius: 6px; background: #fafbfc; }
+.toggle-row:has(input:checked) { border-color: #2ea043; background: #f0fdf4; }
+.switch-label { display: contents; cursor: pointer; }
+.switch-label input[type=checkbox] { flex-shrink: 0; width: 38px; height: 22px; appearance: none; background: #cbd1d8; border-radius: 11px; position: relative; cursor: pointer; transition: background .15s; outline: none; border: none; margin: 0; }
 .switch-label input[type=checkbox]:checked { background: #2ea043; }
 .switch-label input[type=checkbox]::before { content: ""; position: absolute; left: 2px; top: 2px; width: 18px; height: 18px; background: #fff; border-radius: 50%; transition: left .15s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
 .switch-label input[type=checkbox]:checked::before { left: 18px; }
-.switch-text { font-size: .95rem; }
+.switch-text { font-size: .92rem; font-weight: 500; cursor: pointer; }
+.toggle-hint { font-size: .8rem; color: #888; margin-top: .6rem; }
+
+/* Shuttle */
+.shuttle { display: grid; grid-template-columns: 1fr 36px 1fr; gap: .5rem; align-items: stretch; }
+.shuttle .pane { display: flex; flex-direction: column; gap: .3rem; min-width: 0; }
+.shuttle .pane input[type=text] { font-size: .85rem; }
+.shuttle .pane select[multiple] { flex: 1; min-height: 300px; font-family: monospace; font-size: .82rem; }
+.pane-header { display: flex; align-items: baseline; gap: .3rem; flex-wrap: wrap; }
+.pane-label { font-size: .8rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #555; }
+.pane-count { font-size: .75rem; color: #aaa; }
+.shuttle-buttons { display: flex; flex-direction: column; justify-content: center; gap: .4rem; }
+.shuttle-buttons button { margin: 0; padding: .35rem .5rem; font-size: .85rem; background: #eef1f4; color: #444; border: 1px solid #d1d5da; border-radius: 4px; font-weight: bold; cursor: pointer; }
+.shuttle-buttons button:hover { background: #d1d5da; }
+.inline-mode { width: auto !important; display: inline-block; font-size: .8rem; padding: 1px 4px; margin: 0 .15rem; font-weight: 600; border-radius: 3px; }
+.shuttle-dblclick-hint { font-size: .78rem; color: #aaa; margin-top: .3rem; }
 </style>
 <script>
 function shuttleFilter(id, q) {
@@ -189,34 +199,41 @@ if (document.readyState === 'loading') {
 </head>
 <body>
 <h1>3CX → Zammad bridge <small>auto-create settings</small></h1>
-<p class="hint">Changes are applied instantly — no restart, no dropped calls. The config file on disk is also updated so settings survive container restarts.</p>
+<p class="page-hint">Changes are applied instantly — no restart, no dropped calls. The config file on disk is also updated so settings survive container restarts.</p>
 
 {{if .Message}}<div class="banner {{.MessageKind}}">{{.Message}}</div>{{end}}
 
 <form method="POST" action="save">
-  <div class="card">
-    <div class="direction-toggles">
+
+  <div class="section">
+    <div class="section-title">Ticket auto-creation</div>
+    <div class="toggle-grid">
       <div class="toggle-row">
         <label class="switch-label">
           <input type="checkbox" name="inbound" value="on" {{if .InboundOn}}checked{{end}}>
-          <span class="switch-text">Create tickets for <b>Inbound</b> calls</span>
+          <span class="switch-text">Inbound calls</span>
         </label>
       </div>
       <div class="toggle-row">
         <label class="switch-label">
           <input type="checkbox" name="outbound" value="on" {{if .OutboundOn}}checked{{end}}>
-          <span class="switch-text">Create tickets for <b>Outbound</b> calls</span>
+          <span class="switch-text">Outbound calls</span>
         </label>
       </div>
-      <div class="hint">Untick both to fully stop ticket creation — the bridge still forwards live CTI events to Zammad but never touches the /tickets endpoint.</div>
     </div>
+    <div class="toggle-hint">Disabling both stops ticket creation entirely — the bridge still forwards live CTI events to Zammad for the agent widget.</div>
+  </div>
 
-    <label>Extensions</label>
-    {{if .ExtensionsError}}<div class="hint" style="color:#86181d">Could not load 3CX extension directory ({{.ExtensionsError}}) — using the numbers that are already on file.</div>{{end}}
+  <div class="section">
+    <div class="section-title">Extension filter</div>
+    {{if .ExtensionsError}}<div class="hint" style="color:#86181d;margin-bottom:.5rem">⚠ Could not load 3CX extension directory ({{.ExtensionsError}}) — using the numbers that are already on file.</div>{{end}}
     {{if .Extensions}}
       <div class="shuttle">
         <div class="pane">
-          <div class="pane-title">Available <span class="pane-count" id="available-count"></span></div>
+          <div class="pane-header">
+            <span class="pane-label">Available</span>
+            <span class="pane-count" id="available-count"></span>
+          </div>
           <input type="text" placeholder="Search by number or name…" oninput="shuttleFilter('available-select', this.value)">
           <select id="available-select" multiple ondblclick="shuttleMove('available-select','selected-select')">
             {{range .Extensions}}{{if not (index $.ExtListMap .Number)}}
@@ -225,18 +242,18 @@ if (document.readyState === 'loading') {
           </select>
         </div>
         <div class="shuttle-buttons">
-          <button type="button" onclick="shuttleMove('available-select','selected-select')" title="Move selected rows to the filter list">→</button>
-          <button type="button" onclick="shuttleMove('selected-select','available-select')" title="Move selected rows back to Available">←</button>
-          <button type="button" onclick="shuttleMove('available-select','selected-select', true)" title="Move all visible rows to the filter list">⇒</button>
-          <button type="button" onclick="shuttleMove('selected-select','available-select', true)" title="Clear the filter list">⇐</button>
+          <button type="button" onclick="shuttleMove('available-select','selected-select')" title="Move selected to filter list">→</button>
+          <button type="button" onclick="shuttleMove('selected-select','available-select')" title="Remove selected from filter list">←</button>
+          <button type="button" onclick="shuttleMove('available-select','selected-select', true)" title="Add all visible to filter list">⇒</button>
+          <button type="button" onclick="shuttleMove('selected-select','available-select', true)" title="Clear filter list">⇐</button>
         </div>
         <div class="pane">
-          <div class="pane-title">
-            Extensions that are
+          <div class="pane-header">
+            <span class="pane-label">Extensions that are</span>
             <select name="extension_filter_mode" class="inline-mode">
               <option value="exclude" {{if eq .ExtMode "exclude"}}selected{{end}}>Excluded</option>
               <option value="include" {{if eq .ExtMode "include"}}selected{{end}}>Included</option>
-              <option value="all"     {{if eq .ExtMode "all"}}selected{{end}}>Ignored (filter off)</option>
+              <option value="all"     {{if eq .ExtMode "all"}}selected{{end}}>Ignored (off)</option>
             </select>
             <span class="pane-count" id="selected-count"></span>
           </div>
@@ -249,19 +266,19 @@ if (document.readyState === 'loading') {
           <div class="hint" id="selected-label"></div>
         </div>
       </div>
-      <div class="hint">Double-click a row to move it across. The filter mode above controls whether the right-hand list is treated as an include-list or an exclude-list.</div>
+      <div class="shuttle-dblclick-hint">Double-click a row to move it across.</div>
     {{else}}
       <textarea name="extension_filter" placeholder="908&#10;909&#10;910">{{.ExtList}}</textarea>
-      <div class="hint">One per line. Directory lookup from 3CX was not available, so you're editing the list directly.</div>
+      <div class="hint">One extension number per line. Directory lookup from 3CX was not available.</div>
     {{end}}
   </div>
 
-  <button type="submit">Save &amp; apply</button>
-</form>
+  <div class="actions">
+    <button type="submit">Save &amp; apply</button>
+    <span class="footer-meta">Config: <code>{{.ConfigPath}}</code></span>
+  </div>
 
-<div class="current">
-  Config file on server: <code>{{.ConfigPath}}</code>
-</div>
+</form>
 </body>
 </html>`
 
