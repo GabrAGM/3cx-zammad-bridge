@@ -122,6 +122,11 @@ code { background: #eef1f4; padding: 1px 5px; border-radius: 3px; font-size: .82
 .shuttle-buttons button:hover { background: #d1d5da; }
 .inline-mode { width: auto !important; display: inline-block; font-size: .8rem; padding: 1px 4px; margin: 0 .15rem; font-weight: 600; border-radius: 3px; }
 .shuttle-dblclick-hint { font-size: .78rem; color: #aaa; margin-top: .3rem; }
+.manual-add { display: flex; gap: .4rem; margin-top: .5rem; align-items: center; }
+.manual-add input { width: 110px; flex-shrink: 0; font-family: monospace; }
+.manual-add button { margin: 0; padding: .3rem .7rem; font-size: .82rem; background: #eef1f4; color: #444; border: 1px solid #d1d5da; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+.manual-add button:hover { background: #d1d5da; }
+.manual-add .hint { margin: 0; }
 </style>
 <script>
 function shuttleFilter(id, q) {
@@ -162,6 +167,22 @@ function updateShuttleCounts() {
   const sc = document.getElementById('selected-count');
   if (a && ac) ac.textContent = a.options.length + ' extensions';
   if (s && sc) sc.textContent = s.options.length + ' selected';
+}
+function addManualExtension() {
+  const input = document.getElementById('manual-ext-input');
+  const num = input.value.trim();
+  if (!num) return;
+  const avail = document.getElementById('available-select');
+  const sel = document.getElementById('selected-select');
+  for (const o of [...avail.options, ...sel.options]) {
+    if (o.value === num) { input.value = ''; input.focus(); return; }
+  }
+  const opt = new Option(num + ' — (manual entry)', num);
+  avail.appendChild(opt);
+  sortSelect(avail);
+  updateShuttleCounts();
+  input.value = '';
+  input.focus();
 }
 function selectAllInSelected() {
   const s = document.getElementById('selected-select');
@@ -265,6 +286,12 @@ if (document.readyState === 'loading') {
           </select>
           <div class="hint" id="selected-label"></div>
         </div>
+      </div>
+      <div class="manual-add">
+        <input type="text" id="manual-ext-input" placeholder="e.g. 700" maxlength="10"
+               onkeydown="if(event.key==='Enter'){event.preventDefault();addManualExtension();}">
+        <button type="button" onclick="addManualExtension()">+ Add number</button>
+        <span class="hint">For extensions not in the directory (conferences, IVR…)</span>
       </div>
       <div class="shuttle-dblclick-hint">Double-click a row to move it across.</div>
     {{else}}
