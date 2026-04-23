@@ -53,6 +53,13 @@ type GroupListEntryObject struct {
 	} `json:"Members"`
 }
 
+// Extension is a 3CX user/extension, displayed in the admin UI so operators
+// can pick filter targets by name instead of guessing numbers.
+type Extension struct {
+	Number string `json:"number"`
+	Name   string `json:"name"`
+}
+
 // API3CX abstracts away the differences in API versions from before v20 and after v20 of 3CX.
 type API3CX interface {
 	// AuthenticateRetry authenticates the client and retries in case of offline status
@@ -62,6 +69,11 @@ type API3CX interface {
 	// FetchCalls retrieves information about current calls from the 3CX API.
 	// It returns a slice of CallInformation structs and an error if the API call fails.
 	FetchCalls() ([]CallInformation, error)
+
+	// FetchExtensions retrieves the directory of extensions (users + queues +
+	// virtual extensions) from 3CX. Used by the admin UI to render a picker
+	// with human-readable names instead of a bare number list.
+	FetchExtensions() ([]Extension, error)
 
 	// IsExtension checks if a given phone number is a valid extension that is being monitored.
 	IsExtension(number string) bool

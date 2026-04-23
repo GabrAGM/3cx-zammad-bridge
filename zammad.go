@@ -128,11 +128,20 @@ func (z *ZammadBridge) ZammadHangup(call *CallInformation, cause string) error {
 		return err
 	}
 
-	// Auto-create ticket if enabled
-	if z.Config.Zammad.AutoCreateTicket && z.Config.Zammad.ApiUrl != "" && z.Config.Zammad.ApiToken != "" {
-		ticketErr := z.ZammadCreateTicket(call, cause)
-		if ticketErr != nil {
-			log.Error().Err(ticketErr).Str("call_id", call.CallUID).Msg("Failed to create Zammad ticket")
+	// Auto-create ticket if enabled and the call passes direction+extension filters
+	settings := z.GetAutoCreateSettings()
+	if settings.Enabled && z.Config.Zammad.ApiUrl != "" && z.Config.Zammad.ApiToken != "" {
+		if z.ShouldAutoCreate(call) {
+			ticketErr := z.ZammadCreateTicket(call, cause)
+			if ticketErr != nil {
+				log.Error().Err(ticketErr).Str("call_id", call.CallUID).Msg("Failed to create Zammad ticket")
+			}
+		} else {
+			log.Debug().
+				Str("call_id", call.CallUID).
+				Str("direction", call.Direction).
+				Str("agent", call.AgentNumber).
+				Msg("Skipping Zammad ticket auto-creation (filtered out by config)")
 		}
 	}
 

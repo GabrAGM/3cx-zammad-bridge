@@ -291,3 +291,14 @@ func (z *Client3CXPre20) IsExtension(number string) bool {
 	_, ok := z.phoneExtensions[number]
 	return ok
 }
+
+// FetchExtensions on pre-v20 returns the loaded phoneExtensions map. Pre-v20
+// auth flows only expose extensions the bridge is configured to monitor, so
+// this covers the entire usable set.
+func (z *Client3CXPre20) FetchExtensions() ([]Extension, error) {
+	out := make([]Extension, 0, len(z.phoneExtensions))
+	for num := range z.phoneExtensions {
+		out = append(out, Extension{Number: num, Name: num})
+	}
+	return out, nil
+}

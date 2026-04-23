@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,6 +20,97 @@ type ZammadBridge struct {
 	ClientZammad http.Client
 
 	ongoingCalls map[json.Number]CallInformation
+
+	// autoCreate holds the live auto-create settings. Readers (every call
+	// hangup) Load() without locks; the admin UI Store()s a fresh pointer
+	// after validating input. Following Go's standard read-copy-update
+	// idiom: the pointed-to value is immutable once stored — writers must
+	// build a new AutoCreateSettings and Store it rather than mutate.
+	autoCreate atomic.Pointer[AutoCreateSettings]
+
+	// extensionCache and extensionCacheAt power the admin-UI extension
+	// picker. The TTL keeps the 3CX XAPI from being hammered on every
+	// page load (admin traffic is rare but renders can spam on refresh).
+	extensionCache   atomic.Pointer[[]Extension]
+	extensionCacheAt atomic.Int64 // unix nano of last successful fetch
+}
+
+// AutoCreateSettings is an immutable snapshot of the mutable auto-create
+// config. Never mutate after passing to SetAutoCreateSettings — build a new
+// value instead.
+type AutoCreateSettings struct {
+	Enabled    bool
+	Directions string
+	ExtMode    string
+	ExtList    []string
+}
+
+// GetAutoCreateSettings returns the current auto-create settings. The
+// returned value is safe to read but MUST NOT be mutated.
+func (z *ZammadBridge) GetAutoCreateSettings() AutoCreateSettings {
+	p := z.autoCreate.Load()
+	if p == nil {
+		return AutoCreateSettings{}
+	}
+	return *p
+}
+
+// SetAutoCreateSettings atomically swaps the live auto-create settings so
+// the next call that hangs up picks up the new values without a restart.
+// The caller's slice is shallow-copied to insulate the stored value from
+// later mutation on the caller side.
+func (z *ZammadBridge) SetAutoCreateSettings(s AutoCreateSettings) {
+	snapshot := &AutoCreateSettings{
+		Enabled:    s.Enabled,
+		Directions: s.Directions,
+		ExtMode:    s.ExtMode,
+		ExtList:    append([]string(nil), s.ExtList...),
+	}
+	z.autoCreate.Store(snapshot)
+}
+
+const extensionCacheTTL = 5 * time.Minute
+
+// GetExtensions returns the cached extension directory, fetching from 3CX
+// when the cache is stale or empty. Errors are returned to the caller so the
+// admin UI can render a degraded view (freeform list) rather than a broken
+// picker.
+func (z *ZammadBridge) GetExtensions() ([]Extension, error) {
+	if cached := z.extensionCache.Load(); cached != nil {
+		ageNanos := time.Now().UnixNano() - z.extensionCacheAt.Load()
+		if ageNanos < int64(extensionCacheTTL) {
+			return *cached, nil
+		}
+	}
+
+	if z.Client3CX == nil {
+		return nil, fmt.Errorf("3CX client not initialized")
+	}
+
+	extensions, err := z.Client3CX.FetchExtensions()
+	if err != nil {
+		// Return a stale cache if we have one — better than nothing for the UI.
+		if cached := z.extensionCache.Load(); cached != nil {
+			return *cached, err
+		}
+		return nil, err
+	}
+
+	z.extensionCache.Store(&extensions)
+	z.extensionCacheAt.Store(time.Now().UnixNano())
+	return extensions, nil
+}
+
+// loadAutoCreateFromConfig seeds autoCreate from the Zammad config section.
+// Called at bridge construction and whenever the process boots with a
+// freshly-loaded config file.
+func (z *ZammadBridge) loadAutoCreateFromConfig() {
+	z.SetAutoCreateSettings(AutoCreateSettings{
+		Enabled:    z.Config.Zammad.AutoCreateTicket,
+		Directions: z.Config.Zammad.AutoCreateDirections,
+		ExtMode:    z.Config.Zammad.ExtensionFilterMode,
+		ExtList:    z.Config.Zammad.ExtensionFilter,
+	})
 }
 
 // NewZammadBridge initializes a new client that listens for 3CX calls and forwards to Zammad.
@@ -28,11 +120,13 @@ func NewZammadBridge(config *Config) (*ZammadBridge, error) {
 		return nil, fmt.Errorf("unable to create 3CX client: %w", err)
 	}
 
-	return &ZammadBridge{
+	b := &ZammadBridge{
 		Config:       config,
 		Client3CX:    client3CX,
 		ongoingCalls: map[json.Number]CallInformation{},
-	}, nil
+	}
+	b.loadAutoCreateFromConfig()
+	return b, nil
 }
 
 // Listen listens for calls and does not return unless something really bad happened.
