@@ -193,7 +193,7 @@ if (document.readyState === 'loading') {
 
 {{if .Message}}<div class="banner {{.MessageKind}}">{{.Message}}</div>{{end}}
 
-<form method="POST" action="/save">
+<form method="POST" action="save">
   <div class="card">
     <div class="direction-toggles">
       <div class="toggle-row">
