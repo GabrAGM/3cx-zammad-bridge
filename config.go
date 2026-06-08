@@ -54,6 +54,11 @@ type Config struct {
 		// ExtensionFilter lists the 3CX extensions (agent numbers) that the filter
 		// mode applies to. Ignored when mode is "all".
 		ExtensionFilter []string `yaml:"extension_filter"`
+		// AutoCreateDedupWindowMinutes consolidates repeat calls from the same
+		// external number into an existing new/open phone ticket created within
+		// this many minutes, instead of opening a duplicate. 0 disables
+		// consolidation (always create) — the backward-compatible default.
+		AutoCreateDedupWindowMinutes int `yaml:"auto_create_dedup_window_minutes"`
 	} `yaml:"Zammad"`
 }
 

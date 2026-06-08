@@ -129,3 +129,19 @@ func TestShouldAutoCreate_ExtensionListWhitespace(t *testing.T) {
 		t.Fatalf("whitespace in configured list must be trimmed")
 	}
 }
+
+func TestDedupWindow_Plumbing(t *testing.T) {
+	cfg := &Config{}
+	cfg.Zammad.AutoCreateDedupWindowMinutes = 10
+	b := &ZammadBridge{Config: cfg}
+	b.loadAutoCreateFromConfig()
+
+	if got := b.GetAutoCreateSettings().DedupWindowMinutes; got != 10 {
+		t.Fatalf("loadAutoCreateFromConfig: DedupWindowMinutes = %d, want 10", got)
+	}
+
+	b.SetAutoCreateSettings(AutoCreateSettings{DedupWindowMinutes: 25})
+	if got := b.GetAutoCreateSettings().DedupWindowMinutes; got != 25 {
+		t.Fatalf("after hot-swap: DedupWindowMinutes = %d, want 25", got)
+	}
+}

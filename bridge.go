@@ -39,10 +39,11 @@ type ZammadBridge struct {
 // config. Never mutate after passing to SetAutoCreateSettings — build a new
 // value instead.
 type AutoCreateSettings struct {
-	Enabled    bool
-	Directions string
-	ExtMode    string
-	ExtList    []string
+	Enabled            bool
+	Directions         string
+	ExtMode            string
+	ExtList            []string
+	DedupWindowMinutes int
 }
 
 // GetAutoCreateSettings returns the current auto-create settings. The
@@ -61,10 +62,11 @@ func (z *ZammadBridge) GetAutoCreateSettings() AutoCreateSettings {
 // later mutation on the caller side.
 func (z *ZammadBridge) SetAutoCreateSettings(s AutoCreateSettings) {
 	snapshot := &AutoCreateSettings{
-		Enabled:    s.Enabled,
-		Directions: s.Directions,
-		ExtMode:    s.ExtMode,
-		ExtList:    append([]string(nil), s.ExtList...),
+		Enabled:            s.Enabled,
+		Directions:         s.Directions,
+		ExtMode:            s.ExtMode,
+		ExtList:            append([]string(nil), s.ExtList...),
+		DedupWindowMinutes: s.DedupWindowMinutes,
 	}
 	z.autoCreate.Store(snapshot)
 }
@@ -106,10 +108,11 @@ func (z *ZammadBridge) GetExtensions() ([]Extension, error) {
 // freshly-loaded config file.
 func (z *ZammadBridge) loadAutoCreateFromConfig() {
 	z.SetAutoCreateSettings(AutoCreateSettings{
-		Enabled:    z.Config.Zammad.AutoCreateTicket,
-		Directions: z.Config.Zammad.AutoCreateDirections,
-		ExtMode:    z.Config.Zammad.ExtensionFilterMode,
-		ExtList:    z.Config.Zammad.ExtensionFilter,
+		Enabled:            z.Config.Zammad.AutoCreateTicket,
+		Directions:         z.Config.Zammad.AutoCreateDirections,
+		ExtMode:            z.Config.Zammad.ExtensionFilterMode,
+		ExtList:            z.Config.Zammad.ExtensionFilter,
+		DedupWindowMinutes: z.Config.Zammad.AutoCreateDedupWindowMinutes,
 	})
 }
 
