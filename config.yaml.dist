@@ -51,3 +51,8 @@ Zammad:
   extension_filter:
     # - "100"
     # - "101"
+
+  # Consolidate repeat calls from the same external number into an existing
+  # new/open ticket in ticket_group created within this many minutes, instead
+  # of opening a duplicate. 0 disables consolidation (always create).
+  auto_create_dedup_window_minutes: 0

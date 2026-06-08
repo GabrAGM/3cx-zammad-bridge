@@ -58,6 +58,18 @@ Zammad:
     log_missed_queue_calls: true # boolean; Whether or not you want to log missed calls to your queue
 ```
 
+## Auto-create tickets
+
+The bridge can automatically create a Zammad ticket (and, if the caller is unknown, a Zammad user) whenever a call ends. Enable this with `auto_create_ticket: true` and set `api_url`, `api_token`, and `ticket_group` under `Zammad:`. Use `auto_create_directions` (`all` | `inbound` | `outbound` | `none`) and the `extension_filter_mode` / `extension_filter` keys to control which calls trigger creation.
+
+### Repeat-call consolidation
+
+`auto_create_dedup_window_minutes` (default `0`, off) consolidates repeat calls.
+When a caller who already has a new/open ticket in `ticket_group` calls again
+within the configured number of minutes, the bridge appends the call to that
+ticket instead of creating a new one. Editable live in the admin UI. Lookups
+fail open — if Zammad cannot be queried, a normal ticket is created.
+
 ## Running
  
 Run the release binary to run the daemon. 
