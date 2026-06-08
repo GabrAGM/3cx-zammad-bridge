@@ -1,6 +1,9 @@
 package zammadbridge
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 // ShouldAutoCreate decides whether the bridge should auto-create a Zammad
 // ticket (and, if necessary, a Zammad user) for the given call based on the
@@ -74,4 +77,15 @@ func matchesExtension(mode string, list []string, agentNumber string) bool {
 	}
 	// Unknown mode -> fail closed.
 	return false
+}
+
+// withinDedupWindow reports whether createdAt is recent enough (>= now-minutes)
+// to consolidate a new call into that ticket. minutes <= 0 disables
+// consolidation; a zero createdAt never qualifies. The boundary is inclusive.
+func withinDedupWindow(createdAt, now time.Time, minutes int) bool {
+	if minutes <= 0 || createdAt.IsZero() {
+		return false
+	}
+	cutoff := now.Add(-time.Duration(minutes) * time.Minute)
+	return !createdAt.Before(cutoff)
 }

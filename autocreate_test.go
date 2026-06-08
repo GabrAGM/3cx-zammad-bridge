@@ -1,6 +1,9 @@
 package zammadbridge
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func newBridgeWithZammad(directions, extMode string, extList []string) *ZammadBridge {
 	cfg := &Config{}
@@ -127,6 +130,31 @@ func TestShouldAutoCreate_ExtensionListWhitespace(t *testing.T) {
 	z := newBridgeWithZammad("all", "include", []string{" 100 ", "101"})
 	if !z.ShouldAutoCreate(&CallInformation{Direction: "Inbound", AgentNumber: "100"}) {
 		t.Fatalf("whitespace in configured list must be trimmed")
+	}
+}
+
+func TestWithinDedupWindow(t *testing.T) {
+	now := time.Date(2026, 6, 2, 9, 43, 0, 0, time.UTC)
+	cases := []struct {
+		name      string
+		createdAt time.Time
+		minutes   int
+		want      bool
+	}{
+		{"disabled zero", now.Add(-1 * time.Minute), 0, false},
+		{"disabled negative", now.Add(-1 * time.Minute), -5, false},
+		{"inside window", now.Add(-3 * time.Minute), 10, true},
+		{"outside window", now.Add(-11 * time.Minute), 10, false},
+		{"exact boundary is inside", now.Add(-10 * time.Minute), 10, true},
+		{"zero createdAt", time.Time{}, 10, false},
+		{"created in future still inside", now.Add(1 * time.Minute), 10, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := withinDedupWindow(tc.createdAt, now, tc.minutes); got != tc.want {
+				t.Fatalf("withinDedupWindow(%v, now, %d) = %v, want %v", tc.createdAt, tc.minutes, got, tc.want)
+			}
+		})
 	}
 }
 
