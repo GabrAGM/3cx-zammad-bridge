@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -34,6 +36,27 @@ type ZammadUserSearchResult struct {
 
 type ZammadTicketResponse struct {
 	ID int `json:"id"`
+}
+
+// ZammadTicketSearchResponse is the id-list shape returned by
+// /api/v1/tickets/search.
+type ZammadTicketSearchResponse struct {
+	Tickets []int `json:"tickets"`
+}
+
+// ZammadTicketDetail is the minimal projection of GET /api/v1/tickets/{id}.
+type ZammadTicketDetail struct {
+	ID        int    `json:"id"`
+	CreatedAt string `json:"created_at"`
+}
+
+// ZammadArticleAppend is the body for POST /api/v1/ticket_articles.
+type ZammadArticleAppend struct {
+	TicketID int    `json:"ticket_id"`
+	Subject  string `json:"subject"`
+	Body     string `json:"body"`
+	Type     string `json:"type"`
+	Internal bool   `json:"internal"`
 }
 
 type ZammadApiRequest struct {
@@ -205,6 +228,112 @@ func (z *ZammadBridge) ZammadCreateUser(phone string) (int, error) {
 	json.Unmarshal(respBody, &result)
 	log.Info().Int("user_id", result.ID).Str("phone", phone).Msg("Created Zammad user")
 	return result.ID, nil
+}
+
+// ZammadFindRecentOpenPhoneTicket returns the most recent new/open ticket in
+// the configured phone group whose customer is this call's external number,
+// when it was created within windowMinutes. Returns (0,false,nil) when nothing
+// qualifies and (0,false,err) on any API error so the caller can fail open.
+func (z *ZammadBridge) ZammadFindRecentOpenPhoneTicket(call *CallInformation, windowMinutes int, now time.Time) (int, bool, error) {
+	if windowMinutes <= 0 || call == nil || call.ExternalNumber == "" {
+		return 0, false, nil
+	}
+
+	customerID, err := z.ZammadLookupUser(call.ExternalNumber)
+	if err != nil {
+		return 0, false, err
+	}
+	if customerID == 0 {
+		return 0, false, nil
+	}
+
+	group := z.Config.Zammad.TicketGroup
+	if group == "" {
+		group = "Users"
+	}
+	group = strings.ReplaceAll(group, `"`, `\"`)
+
+	query := fmt.Sprintf(`customer_id:%d AND group.name:"%s" AND (state.name:new OR state.name:open)`, customerID, group)
+	searchURL := fmt.Sprintf("%s/api/v1/tickets/search?query=%s&limit=1&sort_by=created_at&order_by=desc",
+		z.Config.Zammad.ApiUrl, url.QueryEscape(query))
+
+	var search ZammadTicketSearchResponse
+	if err := z.zammadGetJSON(searchURL, &search); err != nil {
+		return 0, false, err
+	}
+	if len(search.Tickets) == 0 {
+		return 0, false, nil
+	}
+
+	var detail ZammadTicketDetail
+	detailURL := fmt.Sprintf("%s/api/v1/tickets/%d", z.Config.Zammad.ApiUrl, search.Tickets[0])
+	if err := z.zammadGetJSON(detailURL, &detail); err != nil {
+		return 0, false, err
+	}
+
+	createdAt, err := time.Parse(time.RFC3339, detail.CreatedAt)
+	if err != nil {
+		return 0, false, fmt.Errorf("unable to parse ticket created_at %q: %w", detail.CreatedAt, err)
+	}
+	if withinDedupWindow(createdAt, now, windowMinutes) {
+		return detail.ID, true, nil
+	}
+	return 0, false, nil
+}
+
+// zammadGetJSON performs an authenticated GET and decodes a JSON body.
+func (z *ZammadBridge) zammadGetJSON(rawURL string, out interface{}) error {
+	req, err := http.NewRequest("GET", rawURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Token token="+z.Config.Zammad.ApiToken)
+	resp, err := z.ClientZammad.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("GET %s failed (HTTP %d): %s", rawURL, resp.StatusCode, string(body))
+	}
+	if err := json.Unmarshal(body, out); err != nil {
+		return fmt.Errorf("GET %s: JSON decode failed: %w", rawURL, err)
+	}
+	return nil
+}
+
+// ZammadAppendCallArticle adds the call as a phone article on an existing
+// ticket (used when a repeat call is consolidated).
+func (z *ZammadBridge) ZammadAppendCallArticle(ticketID int, call *CallInformation, cause string) error {
+	callType := callTypeFor(call, cause)
+	article := ZammadArticleAppend{
+		TicketID: ticketID,
+		Subject:  "Phone Call",
+		Body:     "Repeat call (consolidated into this ticket)\n\n" + buildCallBody(call, callType),
+		Type:     "phone",
+		Internal: false,
+	}
+	payload, err := json.Marshal(article)
+	if err != nil {
+		return fmt.Errorf("unable to serialize article JSON: %w", err)
+	}
+	req, err := http.NewRequest("POST", z.Config.Zammad.ApiUrl+"/api/v1/ticket_articles", bytes.NewBuffer(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Token token="+z.Config.Zammad.ApiToken)
+	resp, err := z.ClientZammad.Do(req)
+	if err != nil {
+		return fmt.Errorf("unable to append article: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("article append failed (HTTP %d): %s", resp.StatusCode, string(data))
+	}
+	return nil
 }
 
 // callTypeFor derives the human call-type label from direction + hangup cause.
