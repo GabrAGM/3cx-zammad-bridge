@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -246,6 +247,16 @@ if (document.readyState === 'loading') {
   </div>
 
   <div class="section">
+    <div class="section-title">Repeat-call consolidation</div>
+    <div class="switch-text" style="margin-bottom:.4rem">
+      Consolidate repeat calls from the same number within
+      <input type="text" name="dedup_window_minutes" value="{{.DedupWindowMinutes}}"
+             inputmode="numeric" style="width:80px;display:inline-block;text-align:center"> minutes
+    </div>
+    <div class="hint">When a caller who already has a new/open ticket in the phone group calls again within this many minutes, the call is appended to that ticket instead of opening a new one. <code>0</code> turns consolidation off.</div>
+  </div>
+
+  <div class="section">
     <div class="section-title">Extension filter</div>
     {{if .ExtensionsError}}<div class="hint" style="color:#86181d;margin-bottom:.5rem">⚠ Could not load 3CX extension directory ({{.ExtensionsError}}) — using the numbers that are already on file.</div>{{end}}
     {{if .Extensions}}
@@ -310,16 +321,17 @@ if (document.readyState === 'loading') {
 </html>`
 
 type adminView struct {
-	InboundOn       bool
-	OutboundOn      bool
-	ExtMode         string
-	ExtList         string          // newline-separated — used only by textarea fallback
-	ExtListMap      map[string]bool // numbers currently in filter, used by multi-select
-	Extensions      []Extension     // from 3CX directory
-	ExtensionsError string          // set when directory fetch failed
-	ConfigPath      string
-	Message         string
-	MessageKind     string
+	InboundOn          bool
+	OutboundOn         bool
+	ExtMode            string
+	ExtList            string          // newline-separated — used only by textarea fallback
+	ExtListMap         map[string]bool // numbers currently in filter, used by multi-select
+	Extensions         []Extension     // from 3CX directory
+	ExtensionsError    string          // set when directory fetch failed
+	ConfigPath         string
+	Message            string
+	MessageKind        string
+	DedupWindowMinutes int
 }
 
 func viewFromSettings(s AutoCreateSettings, extensions []Extension, extensionsErr error, configPath, message, kind string) adminView {
@@ -356,16 +368,17 @@ func viewFromSettings(s AutoCreateSettings, extensions []Extension, extensionsEr
 		errStr = extensionsErr.Error()
 	}
 	return adminView{
-		InboundOn:       inbound,
-		OutboundOn:      outbound,
-		ExtMode:         mode,
-		ExtList:         strings.Join(s.ExtList, "\n"),
-		ExtListMap:      selected,
-		Extensions:      extensions,
-		ExtensionsError: errStr,
-		ConfigPath:      configPath,
-		Message:         message,
-		MessageKind:     kind,
+		InboundOn:          inbound,
+		OutboundOn:         outbound,
+		ExtMode:            mode,
+		ExtList:            strings.Join(s.ExtList, "\n"),
+		ExtListMap:         selected,
+		Extensions:         extensions,
+		ExtensionsError:    errStr,
+		ConfigPath:         configPath,
+		Message:            message,
+		MessageKind:        kind,
+		DedupWindowMinutes: s.DedupWindowMinutes,
 	}
 }
 
@@ -424,14 +437,21 @@ func adminSaveHandler(bridge *ZammadBridge, configPath string) http.HandlerFunc 
 			directions = "none"
 		}
 
+		dedupWindow, ok := parseDedupWindow(r.FormValue("dedup_window_minutes"))
+		if !ok {
+			writeError(w, tmpl, bridge, configPath, "Invalid repeat-call window — enter a whole number of minutes (0 turns it off).")
+			return
+		}
+
 		newSettings := AutoCreateSettings{
 			// The master "Enabled" flag mirrors "any direction is on". If both
 			// toggles are off, no call can auto-create, so we also record
 			// Enabled=false so the log line + persisted YAML match intent.
-			Enabled:    inboundOn || outboundOn,
-			Directions: directions,
-			ExtMode:    strings.ToLower(strings.TrimSpace(r.FormValue("extension_filter_mode"))),
-			ExtList:    extList,
+			Enabled:            inboundOn || outboundOn,
+			Directions:         directions,
+			ExtMode:            strings.ToLower(strings.TrimSpace(r.FormValue("extension_filter_mode"))),
+			ExtList:            extList,
+			DedupWindowMinutes: dedupWindow,
 		}
 
 		if !validDirection(newSettings.Directions) {
@@ -454,6 +474,7 @@ func adminSaveHandler(bridge *ZammadBridge, configPath string) http.HandlerFunc 
 		fileCfg.Zammad.AutoCreateDirections = newSettings.Directions
 		fileCfg.Zammad.ExtensionFilterMode = newSettings.ExtMode
 		fileCfg.Zammad.ExtensionFilter = newSettings.ExtList
+		fileCfg.Zammad.AutoCreateDedupWindowMinutes = newSettings.DedupWindowMinutes
 		if err := writeConfigYAML(configPath, fileCfg); err != nil {
 			writeError(w, tmpl, bridge, configPath, "Could not write config: "+err.Error())
 			return
@@ -467,6 +488,7 @@ func adminSaveHandler(bridge *ZammadBridge, configPath string) http.HandlerFunc 
 			Str("directions", newSettings.Directions).
 			Str("ext_mode", newSettings.ExtMode).
 			Int("ext_count", len(newSettings.ExtList)).
+			Int("dedup_window_min", newSettings.DedupWindowMinutes).
 			Str("changed_by", basicAuthUser(r)).
 			Msg("Admin UI applied new auto-create settings")
 
@@ -503,6 +525,20 @@ func validExtMode(m string) bool {
 		return true
 	}
 	return false
+}
+
+// parseDedupWindow parses the admin form's dedup-window field. Empty means 0
+// (off). Returns ok=false for non-numeric or negative input.
+func parseDedupWindow(raw string) (int, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, true
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
 }
 
 func parseExtList(raw string) []string {

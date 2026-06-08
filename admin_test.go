@@ -211,8 +211,8 @@ func TestAdminIndexRenders(t *testing.T) {
 	if inboundIdx < 0 || outboundIdx < 0 {
 		t.Fatalf("checkbox inputs not found")
 	}
-	inboundTag := body[max(0, inboundIdx-80):inboundIdx+80]
-	outboundTag := body[max(0, outboundIdx-80):outboundIdx+80]
+	inboundTag := body[max(0, inboundIdx-80) : inboundIdx+80]
+	outboundTag := body[max(0, outboundIdx-80) : outboundIdx+80]
 	if !strings.Contains(inboundTag, "checked") {
 		t.Errorf("inbound toggle should be checked, got: %s", inboundTag)
 	}
@@ -337,6 +337,53 @@ func TestAdminSaveHotSwapsBridge(t *testing.T) {
 	}
 }
 
+func TestAdminSaveDedupWindowPersists(t *testing.T) {
+	path := writeTmpConfig(t, "Zammad: {}\n")
+	bridge := testBridgeFromFile(t, path)
+
+	form := url.Values{}
+	form.Set("inbound", "on")
+	form.Set("extension_filter_mode", "all")
+	form.Set("dedup_window_minutes", "10")
+
+	req := httptest.NewRequest("POST", "/save", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	adminSaveHandler(bridge, path)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := bridge.GetAutoCreateSettings().DedupWindowMinutes; got != 10 {
+		t.Errorf("in-memory DedupWindowMinutes = %d, want 10", got)
+	}
+	reloaded, err := LoadConfigFromYaml(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if reloaded.Zammad.AutoCreateDedupWindowMinutes != 10 {
+		t.Errorf("disk DedupWindowMinutes = %d, want 10", reloaded.Zammad.AutoCreateDedupWindowMinutes)
+	}
+}
+
+func TestAdminSaveRejectsBadDedupWindow(t *testing.T) {
+	for _, bad := range []string{"-5", "abc"} {
+		path := writeTmpConfig(t, "Zammad: {}\n")
+		bridge := testBridgeFromFile(t, path)
+		form := url.Values{}
+		form.Set("inbound", "on")
+		form.Set("extension_filter_mode", "all")
+		form.Set("dedup_window_minutes", bad)
+		req := httptest.NewRequest("POST", "/save", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		adminSaveHandler(bridge, path)(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("dedup_window_minutes=%q: expected 400, got %d", bad, rec.Code)
+		}
+	}
+}
+
 func TestShouldAutoCreateReflectsHotSwap(t *testing.T) {
 	// Start with defaults: all directions, all extensions allowed.
 	bridge := &ZammadBridge{Config: &Config{}}
@@ -360,5 +407,27 @@ func TestShouldAutoCreateReflectsHotSwap(t *testing.T) {
 	inbound := &CallInformation{Direction: "Inbound", AgentNumber: "100"}
 	if !bridge.ShouldAutoCreate(inbound) {
 		t.Fatalf("after hot-swap, inbound to other extension must still pass")
+	}
+}
+
+func TestParseDedupWindow(t *testing.T) {
+	cases := []struct {
+		raw    string
+		wantN  int
+		wantOK bool
+	}{
+		{"", 0, true},
+		{"0", 0, true},
+		{"5", 5, true},
+		{"10", 10, true},
+		{" 10 ", 10, true},
+		{"-1", 0, false},
+		{"abc", 0, false},
+	}
+	for _, tc := range cases {
+		n, ok := parseDedupWindow(tc.raw)
+		if ok != tc.wantOK || (ok && n != tc.wantN) {
+			t.Errorf("parseDedupWindow(%q) = (%d,%v), want (%d,%v)", tc.raw, n, ok, tc.wantN, tc.wantOK)
+		}
 	}
 }
