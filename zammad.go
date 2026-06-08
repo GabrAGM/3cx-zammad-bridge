@@ -207,13 +207,8 @@ func (z *ZammadBridge) ZammadCreateUser(phone string) (int, error) {
 	return result.ID, nil
 }
 
-// ZammadCreateTicket creates a ticket in Zammad for the completed call
-func (z *ZammadBridge) ZammadCreateTicket(call *CallInformation, cause string) error {
-	group := z.Config.Zammad.TicketGroup
-	if group == "" {
-		group = "Users"
-	}
-
+// callTypeFor derives the human call-type label from direction + hangup cause.
+func callTypeFor(call *CallInformation, cause string) string {
 	callType := "Inbound"
 	if call.Direction == "Outbound" || call.Direction == "out" {
 		callType = "Outbound"
@@ -221,26 +216,42 @@ func (z *ZammadBridge) ZammadCreateTicket(call *CallInformation, cause string) e
 	if cause == "cancel" || cause == "noAnswer" {
 		callType = "Missed"
 	}
+	return callType
+}
+
+// buildCallBody renders the call-detail body shared by ticket creation and the
+// repeat-call append article.
+func buildCallBody(call *CallInformation, callType string) string {
+	var parts []string
+	parts = append(parts, fmt.Sprintf("Caller: %s", call.CallFrom))
+	if call.AgentName != "" {
+		parts = append(parts, fmt.Sprintf("Agent: %s (%s)", call.AgentName, call.AgentNumber))
+	} else if call.AgentNumber != "" {
+		parts = append(parts, fmt.Sprintf("Agent: %s", call.AgentNumber))
+	}
+	parts = append(parts, fmt.Sprintf("Call Type: %s", callType))
+	parts = append(parts, fmt.Sprintf("Direction: %s", call.Direction))
+	return strings.Join(parts, "\n")
+}
+
+// ZammadCreateTicket creates a ticket in Zammad for the completed call
+func (z *ZammadBridge) ZammadCreateTicket(call *CallInformation, cause string) error {
+	group := z.Config.Zammad.TicketGroup
+	if group == "" {
+		group = "Users"
+	}
+
+	callType := callTypeFor(call, cause)
 
 	// Look up customer
 	customerID, _ := z.ZammadLookupUser(call.CallFrom)
-
-	var bodyParts []string
-	bodyParts = append(bodyParts, fmt.Sprintf("Caller: %s", call.CallFrom))
-	if call.AgentName != "" {
-		bodyParts = append(bodyParts, fmt.Sprintf("Agent: %s (%s)", call.AgentName, call.AgentNumber))
-	} else if call.AgentNumber != "" {
-		bodyParts = append(bodyParts, fmt.Sprintf("Agent: %s", call.AgentNumber))
-	}
-	bodyParts = append(bodyParts, fmt.Sprintf("Call Type: %s", callType))
-	bodyParts = append(bodyParts, fmt.Sprintf("Direction: %s", call.Direction))
 
 	ticket := ZammadTicketRequest{
 		Title: fmt.Sprintf("Phone Call from %s (%s)", call.CallFrom, callType),
 		Group: group,
 		Article: ZammadArticleCreate{
 			Subject:  "Phone Call",
-			Body:     strings.Join(bodyParts, "\n"),
+			Body:     buildCallBody(call, callType),
 			Type:     "phone",
 			Internal: false,
 		},
