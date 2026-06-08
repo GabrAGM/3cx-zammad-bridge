@@ -155,10 +155,7 @@ func (z *ZammadBridge) ZammadHangup(call *CallInformation, cause string) error {
 	settings := z.GetAutoCreateSettings()
 	if settings.Enabled && z.Config.Zammad.ApiUrl != "" && z.Config.Zammad.ApiToken != "" {
 		if z.ShouldAutoCreate(call) {
-			ticketErr := z.ZammadCreateTicket(call, cause)
-			if ticketErr != nil {
-				log.Error().Err(ticketErr).Str("call_id", call.CallUID).Msg("Failed to create Zammad ticket")
-			}
+			z.autoCreateOrAppend(call, cause, settings.DedupWindowMinutes)
 		} else {
 			log.Debug().
 				Str("call_id", call.CallUID).
@@ -169,6 +166,32 @@ func (z *ZammadBridge) ZammadHangup(call *CallInformation, cause string) error {
 	}
 
 	return nil
+}
+
+// autoCreateOrAppend consolidates a repeat call into a recent open phone ticket
+// when one exists within the dedup window, otherwise creates a new ticket. It
+// fails open: any lookup/append error falls through to ticket creation so a
+// call is never dropped.
+func (z *ZammadBridge) autoCreateOrAppend(call *CallInformation, cause string, windowMinutes int) {
+	if windowMinutes > 0 {
+		ticketID, found, err := z.ZammadFindRecentOpenPhoneTicket(call, windowMinutes, time.Now())
+		if err != nil {
+			log.Warn().Err(err).Str("call_id", call.CallUID).Msg("Dedup lookup failed; creating a new ticket")
+		} else if found {
+			if appendErr := z.ZammadAppendCallArticle(ticketID, call, cause); appendErr != nil {
+				log.Error().Err(appendErr).Int("ticket_id", ticketID).Str("call_id", call.CallUID).
+					Msg("Failed to append repeat call; creating a new ticket")
+			} else {
+				log.Info().Int("ticket_id", ticketID).Str("call_id", call.CallUID).Bool("appended", true).
+					Msg("Repeat call consolidated into existing open ticket")
+				return
+			}
+		}
+	}
+
+	if ticketErr := z.ZammadCreateTicket(call, cause); ticketErr != nil {
+		log.Error().Err(ticketErr).Str("call_id", call.CallUID).Msg("Failed to create Zammad ticket")
+	}
 }
 
 // ZammadLookupUser searches for a Zammad user by phone number

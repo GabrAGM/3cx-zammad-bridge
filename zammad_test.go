@@ -140,3 +140,103 @@ func TestAppendCallArticle_PostsArticle(t *testing.T) {
 		t.Errorf("article body missing 'Repeat call' marker: %q", body)
 	}
 }
+
+func TestZammadHangup_AppendsOnRecentDuplicate(t *testing.T) {
+	created := time.Now().UTC().Add(-2 * time.Minute).Format(time.RFC3339)
+	var createdTicket, appended bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/cti":
+			w.WriteHeader(http.StatusOK)
+		case strings.HasPrefix(r.URL.Path, "/api/v1/users/search"):
+			_, _ = w.Write([]byte(`[{"id":42}]`))
+		case strings.HasPrefix(r.URL.Path, "/api/v1/tickets/search"):
+			_, _ = w.Write([]byte(`{"tickets":[100]}`))
+		case r.URL.Path == "/api/v1/tickets/100":
+			_, _ = w.Write([]byte(`{"id":100,"created_at":"` + created + `"}`))
+		case r.URL.Path == "/api/v1/ticket_articles":
+			appended = true
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":1}`))
+		case r.URL.Path == "/api/v1/tickets":
+			createdTicket = true
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":2}`))
+		}
+	}))
+	defer srv.Close()
+
+	z := newTestBridge(srv.URL)
+	z.SetAutoCreateSettings(AutoCreateSettings{Enabled: true, Directions: "all", DedupWindowMinutes: 10})
+	call := &CallInformation{ExternalNumber: "01223111842", CallFrom: "01223111842", Direction: "Inbound", AgentNumber: "126", ZammadInitialized: true}
+
+	if err := z.ZammadHangup(call, "normalClearing"); err != nil {
+		t.Fatalf("hangup err: %v", err)
+	}
+	if !appended {
+		t.Errorf("expected repeat call to be appended")
+	}
+	if createdTicket {
+		t.Errorf("must NOT create a new ticket when a recent duplicate exists")
+	}
+}
+
+func TestZammadHangup_CreatesWhenNoDuplicate(t *testing.T) {
+	var createdTicket bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/cti":
+			w.WriteHeader(http.StatusOK)
+		case strings.HasPrefix(r.URL.Path, "/api/v1/users/search"):
+			_, _ = w.Write([]byte(`[{"id":42}]`))
+		case strings.HasPrefix(r.URL.Path, "/api/v1/tickets/search"):
+			_, _ = w.Write([]byte(`{"tickets":[]}`))
+		case r.URL.Path == "/api/v1/tickets":
+			createdTicket = true
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":2}`))
+		}
+	}))
+	defer srv.Close()
+
+	z := newTestBridge(srv.URL)
+	z.SetAutoCreateSettings(AutoCreateSettings{Enabled: true, Directions: "all", DedupWindowMinutes: 10})
+	call := &CallInformation{ExternalNumber: "01223111842", CallFrom: "01223111842", Direction: "Inbound", AgentNumber: "126", ZammadInitialized: true}
+
+	if err := z.ZammadHangup(call, "normalClearing"); err != nil {
+		t.Fatalf("hangup err: %v", err)
+	}
+	if !createdTicket {
+		t.Errorf("expected a new ticket when there is no recent duplicate")
+	}
+}
+
+func TestZammadHangup_CreatesOnLookupError(t *testing.T) {
+	var createdTicket bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/cti":
+			w.WriteHeader(http.StatusOK)
+		case strings.HasPrefix(r.URL.Path, "/api/v1/users/search"):
+			_, _ = w.Write([]byte(`[{"id":42}]`))
+		case strings.HasPrefix(r.URL.Path, "/api/v1/tickets/search"):
+			w.WriteHeader(http.StatusInternalServerError) // dedup lookup fails
+		case r.URL.Path == "/api/v1/tickets":
+			createdTicket = true
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":2}`))
+		}
+	}))
+	defer srv.Close()
+
+	z := newTestBridge(srv.URL)
+	z.SetAutoCreateSettings(AutoCreateSettings{Enabled: true, Directions: "all", DedupWindowMinutes: 10})
+	call := &CallInformation{ExternalNumber: "01223111842", CallFrom: "01223111842", Direction: "Inbound", AgentNumber: "126", ZammadInitialized: true}
+
+	if err := z.ZammadHangup(call, "normalClearing"); err != nil {
+		t.Fatalf("hangup err: %v", err)
+	}
+	if !createdTicket {
+		t.Errorf("fail-open: expected a new ticket to be created when the dedup lookup errors")
+	}
+}
