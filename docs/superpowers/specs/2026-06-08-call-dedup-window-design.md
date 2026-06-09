@@ -101,6 +101,19 @@ This matches the defensive posture used elsewhere in the bridge.
 - **Tests** — table tests for `withinDedupWindow` (disabled, inside, outside,
   boundary); extend `autocreate_test.go`.
 
+## Live-verified API shape (final-gate correction)
+
+During the final gate the dedup query was run against the production Zammad
+7.0.1. Findings (commit `496f690`):
+- `/api/v1/tickets/search` returns a **top-level JSON array of full ticket
+  objects** (each including `id` + `created_at`), **not** `{"tickets":[ids]}`.
+  The implementation therefore parses the array directly in a **single call** —
+  no second `/tickets/{id}` fetch.
+- The query field names `customer_id`, `group.name`, `state.name` are valid and
+  Elasticsearch is enabled; the query returned the expected open phone ticket.
+- `created_at` is RFC3339 with fractional seconds (e.g. `…:28.942Z`), parsed
+  correctly by Go's `time.RFC3339`.
+
 ## Known limitation (accepted)
 
 Zammad's `/tickets/search` is Elasticsearch-backed with ~1s refresh lag, so two
