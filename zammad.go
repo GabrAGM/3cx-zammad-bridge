@@ -38,13 +38,9 @@ type ZammadTicketResponse struct {
 	ID int `json:"id"`
 }
 
-// ZammadTicketSearchResponse is the id-list shape returned by
-// /api/v1/tickets/search.
-type ZammadTicketSearchResponse struct {
-	Tickets []int `json:"tickets"`
-}
-
-// ZammadTicketDetail is the minimal projection of GET /api/v1/tickets/{id}.
+// ZammadTicketDetail is the minimal projection of a ticket object as returned
+// by /api/v1/tickets/search (Zammad returns a top-level array of full ticket
+// objects; verified against Zammad 7.0.1).
 type ZammadTicketDetail struct {
 	ID        int    `json:"id"`
 	CreatedAt string `json:"created_at"`
@@ -280,26 +276,22 @@ func (z *ZammadBridge) ZammadFindRecentOpenPhoneTicket(call *CallInformation, wi
 	searchURL := fmt.Sprintf("%s/api/v1/tickets/search?query=%s&limit=1&sort_by=created_at&order_by=desc",
 		z.Config.Zammad.ApiUrl, url.QueryEscape(query))
 
-	var search ZammadTicketSearchResponse
-	if err := z.zammadGetJSON(searchURL, &search); err != nil {
+	// Zammad's /tickets/search returns a top-level JSON array of full ticket
+	// objects (verified against Zammad 7.0.1), newest first given order_by=desc.
+	var tickets []ZammadTicketDetail
+	if err := z.zammadGetJSON(searchURL, &tickets); err != nil {
 		return 0, false, err
 	}
-	if len(search.Tickets) == 0 {
+	if len(tickets) == 0 {
 		return 0, false, nil
 	}
 
-	var detail ZammadTicketDetail
-	detailURL := fmt.Sprintf("%s/api/v1/tickets/%d", z.Config.Zammad.ApiUrl, search.Tickets[0])
-	if err := z.zammadGetJSON(detailURL, &detail); err != nil {
-		return 0, false, err
-	}
-
-	createdAt, err := time.Parse(time.RFC3339, detail.CreatedAt)
+	createdAt, err := time.Parse(time.RFC3339, tickets[0].CreatedAt)
 	if err != nil {
-		return 0, false, fmt.Errorf("unable to parse ticket created_at %q: %w", detail.CreatedAt, err)
+		return 0, false, fmt.Errorf("unable to parse ticket created_at %q: %w", tickets[0].CreatedAt, err)
 	}
 	if withinDedupWindow(createdAt, now, windowMinutes) {
-		return detail.ID, true, nil
+		return tickets[0].ID, true, nil
 	}
 	return 0, false, nil
 }

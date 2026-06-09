@@ -54,9 +54,11 @@ func TestFindRecentOpenPhoneTicket_Found(t *testing.T) {
 		case strings.HasPrefix(r.URL.Path, "/api/v1/users/search"):
 			_, _ = w.Write([]byte(`[{"id":42}]`))
 		case strings.HasPrefix(r.URL.Path, "/api/v1/tickets/search"):
-			_, _ = w.Write([]byte(`{"tickets":[100],"tickets_count":1}`))
-		case r.URL.Path == "/api/v1/tickets/100":
-			_, _ = w.Write([]byte(`{"id":100,"created_at":"` + created + `","state_id":2}`))
+			q := r.URL.Query().Get("query")
+			if !strings.Contains(q, "customer_id:42") || !strings.Contains(q, "group.name:") || !strings.Contains(q, "state.name:new") {
+				t.Errorf("search query missing expected fields: %s", q)
+			}
+			_, _ = w.Write([]byte(`[{"id":100,"created_at":"` + created + `"}]`))
 		default:
 			t.Errorf("unexpected path %s", r.URL.Path)
 		}
@@ -75,15 +77,13 @@ func TestFindRecentOpenPhoneTicket_Found(t *testing.T) {
 }
 
 func TestFindRecentOpenPhoneTicket_TooOld(t *testing.T) {
-	created := time.Now().UTC().Add(-30 * time.Minute).Format(time.RFC3339)
+	created := time.Now().UTC().Add(-30 * time.Minute).Format("2006-01-02T15:04:05.000Z07:00")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/api/v1/users/search"):
 			_, _ = w.Write([]byte(`[{"id":42}]`))
 		case strings.HasPrefix(r.URL.Path, "/api/v1/tickets/search"):
-			_, _ = w.Write([]byte(`{"tickets":[100],"tickets_count":1}`))
-		case r.URL.Path == "/api/v1/tickets/100":
-			_, _ = w.Write([]byte(`{"id":100,"created_at":"` + created + `","state_id":2}`))
+			_, _ = w.Write([]byte(`[{"id":100,"created_at":"` + created + `"}]`))
 		}
 	}))
 	defer srv.Close()
@@ -142,7 +142,7 @@ func TestAppendCallArticle_PostsArticle(t *testing.T) {
 }
 
 func TestZammadHangup_AppendsOnRecentDuplicate(t *testing.T) {
-	created := time.Now().UTC().Add(-2 * time.Minute).Format(time.RFC3339)
+	recent := time.Now().UTC().Add(-2 * time.Minute).Format("2006-01-02T15:04:05.000Z07:00")
 	var createdTicket, appended bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -151,9 +151,7 @@ func TestZammadHangup_AppendsOnRecentDuplicate(t *testing.T) {
 		case strings.HasPrefix(r.URL.Path, "/api/v1/users/search"):
 			_, _ = w.Write([]byte(`[{"id":42}]`))
 		case strings.HasPrefix(r.URL.Path, "/api/v1/tickets/search"):
-			_, _ = w.Write([]byte(`{"tickets":[100]}`))
-		case r.URL.Path == "/api/v1/tickets/100":
-			_, _ = w.Write([]byte(`{"id":100,"created_at":"` + created + `"}`))
+			_, _ = w.Write([]byte(`[{"id":100,"created_at":"` + recent + `"}]`))
 		case r.URL.Path == "/api/v1/ticket_articles":
 			appended = true
 			w.WriteHeader(http.StatusCreated)
@@ -190,7 +188,7 @@ func TestZammadHangup_CreatesWhenNoDuplicate(t *testing.T) {
 		case strings.HasPrefix(r.URL.Path, "/api/v1/users/search"):
 			_, _ = w.Write([]byte(`[{"id":42}]`))
 		case strings.HasPrefix(r.URL.Path, "/api/v1/tickets/search"):
-			_, _ = w.Write([]byte(`{"tickets":[]}`))
+			_, _ = w.Write([]byte(`[]`))
 		case r.URL.Path == "/api/v1/tickets":
 			createdTicket = true
 			w.WriteHeader(http.StatusCreated)
