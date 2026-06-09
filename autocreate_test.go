@@ -114,7 +114,7 @@ func TestShouldAutoCreate_CombinedFilters(t *testing.T) {
 		want             bool
 	}{
 		{"Inbound", "100", true},
-		{"Inbound", "102", false}, // right direction, wrong extension
+		{"Inbound", "102", false},  // right direction, wrong extension
 		{"Outbound", "100", false}, // right extension, wrong direction
 		{"Outbound", "999", false},
 	}
