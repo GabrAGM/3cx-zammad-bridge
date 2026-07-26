@@ -1,0 +1,6 @@
+site_name: 3CX ↔ Zammad Bridge (AGM)
+nav:
+  - Overview: index.md
+  - Configuration: configuration.md
+plugins:
+  - techdocs-core
