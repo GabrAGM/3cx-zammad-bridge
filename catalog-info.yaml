@@ -1,0 +1,40 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: 3cx-zammad-bridge
+  title: 3CX ↔ Zammad Bridge
+  description: >-
+    Go daemon that monitors calls on a 3CX phone system and forwards call
+    events to Zammad's CTI webhook, creating/updating support tickets from
+    phone activity. Fork of qmexnetworks/3cx-zammad-bridge with AGM-specific
+    patches (e.g. auto-creating a Zammad user when one isn't found before
+    ticket creation).
+  tags:
+    - go
+    - cti
+    - 3cx
+    - zammad
+    - telephony
+  links:
+    - url: https://github.com/AGM-One-Vision/3cx-zammad-bridge
+      title: Source (AGM fork)
+      icon: github
+    - url: https://github.com/qmexnetworks/3cx-zammad-bridge
+      title: Upstream repository
+      icon: github
+    - url: https://zammad.agmegypt.com
+      title: Zammad (destination instance)
+      icon: dashboard
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+    github.com/project-slug: AGM-One-Vision/3cx-zammad-bridge
+    devhub.agm/origin: forked-oss
+    devhub.agm/upstream-repo: https://github.com/qmexnetworks/3cx-zammad-bridge
+    devhub.agm/visibility: internal
+spec:
+  type: service
+  lifecycle: production
+  owner: group:default/dto
+  system: system:default/zammad
+  dependsOn:
+    - component:default/zammad
