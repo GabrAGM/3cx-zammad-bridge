@@ -192,8 +192,12 @@ func (z *ZammadBridge) autoCreateOrAppend(call *CallInformation, cause string, w
 
 // ZammadLookupUser searches for a Zammad user by phone number
 func (z *ZammadBridge) ZammadLookupUser(phone string) (int, error) {
-	url := fmt.Sprintf("%s/api/v1/users/search?query=phone:%s&limit=1", z.Config.Zammad.ApiUrl, phone)
-	req, err := http.NewRequest("GET", url, nil)
+	// The number must be escaped: an unescaped leading "+" on an international
+	// caller decodes to a space server-side, so the lookup silently misses.
+	// (Local var is not named `url` so it does not shadow the net/url package.)
+	searchURL := fmt.Sprintf("%s/api/v1/users/search?query=%s&limit=1",
+		z.Config.Zammad.ApiUrl, url.QueryEscape("phone:"+phone))
+	req, err := http.NewRequest("GET", searchURL, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -387,8 +391,15 @@ func (z *ZammadBridge) ZammadCreateTicket(call *CallInformation, cause string) e
 
 	callType := callTypeFor(call, cause)
 
-	// Look up customer
-	customerID, _ := z.ZammadLookupUser(call.CallFrom)
+	// Key the customer on the EXTERNAL party, never on CallFrom: ProcessCall
+	// sets CallFrom = AgentNumber for outbound calls, which would mint a
+	// pseudo-customer named after the agent extension — and the dedup lookup
+	// keys on ExternalNumber, so those tickets could never consolidate.
+	customerNumber := call.ExternalNumber
+	if customerNumber == "" {
+		customerNumber = call.CallFrom
+	}
+	customerID, _ := z.ZammadLookupUser(customerNumber)
 
 	ticket := ZammadTicketRequest{
 		Title: fmt.Sprintf("Phone Call from %s (%s)", call.CallFrom, callType),
@@ -405,9 +416,9 @@ func (z *ZammadBridge) ZammadCreateTicket(call *CallInformation, cause string) e
 		ticket.CustomerID = customerID
 	} else {
 		// Create customer first
-		newID, createErr := z.ZammadCreateUser(call.CallFrom)
+		newID, createErr := z.ZammadCreateUser(customerNumber)
 		if createErr != nil {
-			log.Warn().Err(createErr).Str("phone", call.CallFrom).Msg("Failed to create Zammad user, using default")
+			log.Warn().Err(createErr).Str("phone", customerNumber).Msg("Failed to create Zammad user, using default")
 			ticket.CustomerID = 1
 		} else {
 			ticket.CustomerID = newID

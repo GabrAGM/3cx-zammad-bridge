@@ -238,3 +238,60 @@ func TestZammadHangup_CreatesOnLookupError(t *testing.T) {
 		t.Errorf("fail-open: expected a new ticket to be created when the dedup lookup errors")
 	}
 }
+
+// Follow-up 1: ticket creation must key the customer on the EXTERNAL number,
+// not on CallFrom. ProcessCall sets CallFrom = AgentNumber for outbound calls,
+// so keying on it creates a pseudo-customer named after the agent extension
+// that the dedup lookup (which keys on ExternalNumber) can never match — so
+// repeat outbound calls to the same customer never consolidate.
+func TestZammadCreateTicket_KeysCustomerOnExternalNumber(t *testing.T) {
+	var lookups []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/v1/users/search"):
+			lookups = append(lookups, r.URL.Query().Get("query"))
+			_, _ = w.Write([]byte(`[{"id":42}]`))
+		case r.URL.Path == "/api/v1/tickets":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":2}`))
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer srv.Close()
+
+	z := newTestBridge(srv.URL)
+	// An outbound call: CallFrom is the agent extension, ExternalNumber is the customer.
+	call := &CallInformation{Direction: "Outbound", AgentNumber: "126", CallFrom: "126", ExternalNumber: "01223111842"}
+	if err := z.ZammadCreateTicket(call, "normalClearing"); err != nil {
+		t.Fatalf("create err: %v", err)
+	}
+	for _, q := range lookups {
+		if strings.Contains(q, "126") {
+			t.Fatalf("customer looked up by agent extension (%q); must use the external number", q)
+		}
+	}
+	if len(lookups) == 0 || !strings.Contains(lookups[0], "01223111842") {
+		t.Fatalf("expected lookup on the external number, got %v", lookups)
+	}
+}
+
+// Follow-up 8: the phone number is interpolated into the query string, so a
+// leading "+" on an international caller decodes to a space and the lookup
+// silently misses — dedup never fires and duplicate users get minted.
+func TestZammadLookupUser_EscapesPhoneNumber(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query().Get("query")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+
+	z := newTestBridge(srv.URL)
+	if _, err := z.ZammadLookupUser("+491234567"); err != nil {
+		t.Fatalf("lookup err: %v", err)
+	}
+	if gotQuery != "phone:+491234567" {
+		t.Fatalf("phone not escaped: server decoded query as %q, want %q", gotQuery, "phone:+491234567")
+	}
+}
