@@ -35,12 +35,15 @@ func TestValidDirection(t *testing.T) {
 }
 
 func TestValidExtMode(t *testing.T) {
-	for _, m := range []string{"all", "include", "exclude"} {
+	// "" is valid: it is the "not configured yet" state, which the bridge
+	// treats as fail-closed. Rejecting it made every save from the
+	// no-directory fallback view fail with HTTP 400.
+	for _, m := range []string{"", "all", "include", "exclude"} {
 		if !validExtMode(m) {
 			t.Errorf("%q should be valid", m)
 		}
 	}
-	for _, m := range []string{"", "allow", "deny", "whitelist"} {
+	for _, m := range []string{"allow", "deny", "whitelist"} {
 		if validExtMode(m) {
 			t.Errorf("%q should be invalid", m)
 		}
@@ -431,5 +434,41 @@ func TestParseDedupWindow(t *testing.T) {
 		if ok != tc.wantOK || (ok && n != tc.wantN) {
 			t.Errorf("parseDedupWindow(%q) = (%d,%v), want (%d,%v)", tc.raw, n, ok, tc.wantN, tc.wantOK)
 		}
+	}
+}
+
+// Finding 1: an unset extension_filter_mode must not be presented as "all".
+// The bridge fails closed on "", so showing "Ignored (off)" tells the operator
+// the exact opposite of what is running — and a no-op Save would then submit
+// "all" and turn a fail-closed bridge fully permissive.
+func TestViewFromSettings_UnsetExtModeIsNotAll(t *testing.T) {
+	v := viewFromSettings(AutoCreateSettings{ExtMode: ""}, nil, nil, "/tmp/c.yaml", "", "")
+	if v.ExtMode == "all" {
+		t.Fatalf(`unset ExtMode rendered as "all"; must stay distinct so the UI cannot mis-report fail-closed`)
+	}
+	if v.ExtMode != "" {
+		t.Fatalf(`unset ExtMode should render as ""; got %q`, v.ExtMode)
+	}
+}
+
+// Finding 1b: "" must survive a round-trip through the save handler, so that
+// opening the page and saving without edits leaves a fail-closed bridge closed.
+func TestValidExtMode_AcceptsUnset(t *testing.T) {
+	if !validExtMode("") {
+		t.Fatalf(`validExtMode("") must be true so a no-op Save preserves the unconfigured (fail-closed) state`)
+	}
+}
+
+// Finding 2: the mode select must render even when the 3CX directory is
+// unavailable. It used to live inside {{if .Extensions}}, so with no directory
+// the form posted an empty mode and every save was rejected with HTTP 400.
+func TestAdminIndex_ModeSelectRendersWithoutDirectory(t *testing.T) {
+	bridge := &ZammadBridge{Config: &Config{}}
+	bridge.SetAutoCreateSettings(AutoCreateSettings{Enabled: true, Directions: "inbound", ExtMode: "exclude", ExtList: []string{"908"}})
+	rec := httptest.NewRecorder()
+	adminIndexHandler(bridge, "/tmp/c.yaml")(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	body := rec.Body.String()
+	if !strings.Contains(body, `name="extension_filter_mode"`) {
+		t.Fatalf("fallback view (no 3CX directory) renders no extension_filter_mode select; every save would 400")
 	}
 }

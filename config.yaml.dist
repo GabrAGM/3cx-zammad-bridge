@@ -44,9 +44,14 @@ Zammad:
 
   # Per-extension filter on the AGENT side of the call (i.e. the 3CX extension
   # that answered an inbound call or placed an outbound one).
-  #   all     - no filtering (default)
+  #   all     - no filtering: EVERY extension on the PBX creates tickets
   #   include - only auto-create when the agent extension is in extension_filter
   #   exclude - auto-create for every extension EXCEPT those in extension_filter
+  #
+  # There is deliberately NO permissive default. Leaving this key out (or empty)
+  # fails closed and auto-creates nothing, with a warning at boot. On a PBX
+  # shared between business lines "all" means every brand's calls land in
+  # ticket_group, so that has to be an explicit choice. Prefer "include".
   extension_filter_mode: all
   extension_filter:
     # - "100"

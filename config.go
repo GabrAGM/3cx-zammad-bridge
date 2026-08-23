@@ -49,7 +49,9 @@ type Config struct {
 		AutoCreateDirections string `yaml:"auto_create_directions"`
 		// ExtensionFilterMode controls whether the extension filter list acts as an
 		// allow-list or deny-list. Accepted values: "all" (no filter), "include", "exclude".
-		// Empty string defaults to "all".
+		// An EMPTY/absent value FAILS CLOSED: nothing is auto-created, because on a
+		// PBX shared with other business lines a permissive default tickets every
+		// answered call. Set it explicitly to "all" to accept every extension.
 		ExtensionFilterMode string `yaml:"extension_filter_mode"`
 		// ExtensionFilter lists the 3CX extensions (agent numbers) that the filter
 		// mode applies to. Ignored when mode is "all".

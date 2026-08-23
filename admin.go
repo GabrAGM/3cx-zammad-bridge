@@ -199,8 +199,10 @@ function updateModeLabel() {
     label.textContent = 'Only calls on the extensions listed here will auto-create a ticket — everything else is ignored.';
   } else if (m === 'exclude') {
     label.textContent = 'Calls on the extensions listed here are skipped; every other extension creates tickets normally.';
+  } else if (m === 'all') {
+    label.textContent = 'Filter is off — every extension creates tickets.';
   } else {
-    label.textContent = 'Filter is currently off — every extension creates tickets.';
+    label.textContent = 'No mode chosen yet — the bridge fails closed, so nothing is ticketed at all.';
   }
 }
 function initAdminUI() {
@@ -259,6 +261,15 @@ if (document.readyState === 'loading') {
   <div class="section">
     <div class="section-title">Extension filter</div>
     {{if .ExtensionsError}}<div class="hint" style="color:#86181d;margin-bottom:.5rem">⚠ Could not load 3CX extension directory ({{.ExtensionsError}}) — using the numbers that are already on file.</div>{{end}}
+    <div class="pane-header" style="margin-bottom:.5rem">
+      <span class="pane-label">Extensions listed below are</span>
+      <select name="extension_filter_mode" class="inline-mode">
+        <option value=""        {{if eq .ExtMode ""}}selected{{end}}>Not configured — nothing is ticketed</option>
+        <option value="exclude" {{if eq .ExtMode "exclude"}}selected{{end}}>Excluded</option>
+        <option value="include" {{if eq .ExtMode "include"}}selected{{end}}>Included</option>
+        <option value="all"     {{if eq .ExtMode "all"}}selected{{end}}>Ignored (off)</option>
+      </select>
+    </div>
     {{if .Extensions}}
       <div class="shuttle">
         <div class="pane">
@@ -281,12 +292,7 @@ if (document.readyState === 'loading') {
         </div>
         <div class="pane">
           <div class="pane-header">
-            <span class="pane-label">Extensions that are</span>
-            <select name="extension_filter_mode" class="inline-mode">
-              <option value="exclude" {{if eq .ExtMode "exclude"}}selected{{end}}>Excluded</option>
-              <option value="include" {{if eq .ExtMode "include"}}selected{{end}}>Included</option>
-              <option value="all"     {{if eq .ExtMode "all"}}selected{{end}}>Ignored (off)</option>
-            </select>
+            <span class="pane-label">In filter list</span>
             <span class="pane-count" id="selected-count"></span>
           </div>
           <input type="text" placeholder="Search selected…" oninput="shuttleFilter('selected-select', this.value)">
@@ -341,10 +347,10 @@ func viewFromSettings(s AutoCreateSettings, extensions []Extension, extensionsEr
 	}
 	inbound := s.Enabled && (dir == "all" || dir == "inbound" || dir == "both" || dir == "in")
 	outbound := s.Enabled && (dir == "all" || dir == "outbound" || dir == "both" || dir == "out")
+	// An unset mode is NOT "all": matchesExtension fails closed on "". Keep it
+	// distinct so the page cannot report "filter off" while the bridge is
+	// blocking every call, and so a no-op Save round-trips "" unchanged.
 	mode := strings.ToLower(strings.TrimSpace(s.ExtMode))
-	if mode == "" {
-		mode = "all"
-	}
 	selected := make(map[string]bool, len(s.ExtList))
 	for _, e := range s.ExtList {
 		selected[e] = true
@@ -521,7 +527,9 @@ func validDirection(d string) bool {
 
 func validExtMode(m string) bool {
 	switch m {
-	case "all", "include", "exclude":
+	// "" is accepted so a Save from a page showing "Not configured" preserves
+	// the fail-closed state instead of silently promoting it to "all".
+	case "", "all", "include", "exclude":
 		return true
 	}
 	return false
