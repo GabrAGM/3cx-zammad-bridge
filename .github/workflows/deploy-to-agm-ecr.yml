@@ -1,0 +1,93 @@
+name: Build & Push to AGM ECR
+
+# Runs on every push to main after PR merge. The image sits in ECR;
+# actual rollout to the Zammad EC2 is a separate manual step to avoid
+# shipping a fork binary with a stale exclude-list that would silently
+# drop LC agents. Use workflow_dispatch for a manual build off any branch.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Extra tag for the image (defaults to commit SHA)'
+        required: false
+
+permissions:
+  contents: read
+  id-token: write    # for OIDC to AWS
+
+env:
+  AWS_REGION:     eu-central-1
+  ECR_REGISTRY:   913524945562.dkr.ecr.eu-central-1.amazonaws.com
+  ECR_REPOSITORY: 3cx-zammad-bridge
+
+jobs:
+  build-and-push:
+    name: Build & push image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::913524945562:role/bridge-github-actions-deploy
+          aws-region:     ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Compute tags
+        id: tags
+        run: |
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          EXTRA_TAG="${{ inputs.image_tag || '' }}"
+          echo "sha_tag=${SHORT_SHA}"                                           >> $GITHUB_OUTPUT
+          echo "image_sha=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "image_latest=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest"    >> $GITHUB_OUTPUT
+          if [ -n "$EXTRA_TAG" ]; then
+            echo "image_extra=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${EXTRA_TAG}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build image
+        run: |
+          docker build \
+            -t "${{ steps.tags.outputs.image_sha }}" \
+            -t "${{ steps.tags.outputs.image_latest }}" \
+            ${{ steps.tags.outputs.image_extra && format('-t {0}', steps.tags.outputs.image_extra) || '' }} \
+            .
+
+      - name: Push to ECR
+        run: |
+          docker push "${{ steps.tags.outputs.image_sha }}"
+          docker push "${{ steps.tags.outputs.image_latest }}"
+          if [ -n "${{ steps.tags.outputs.image_extra }}" ]; then
+            docker push "${{ steps.tags.outputs.image_extra }}"
+          fi
+
+      - name: Rollout hint (not automated on purpose)
+        run: |
+          cat <<'EOF'
+          Image pushed successfully.
+
+          Deploy is NOT automated — the Zammad EC2 runs docker compose with
+          image: :latest, but the container will only pull the new image on
+          restart. To ship this build to production:
+
+            aws ssm start-session --target i-04ab9be06910cba01
+            cd /opt/zammad
+            sudo docker compose pull 3cx-zammad-bridge
+            sudo docker compose up -d 3cx-zammad-bridge
+
+          Before doing this, confirm:
+            1. Extension_filter_mode: include with the confirmed LC extension
+               allow-list is in /opt/zammad/3cx-bridge-config.yaml (and TF)
+            2. auto_create_ticket: true (currently false as a bleed-stop)
+
+          See AGM-One-Vision/agm-infrastructure/environments/prod/zammad.tf.
+          EOF
