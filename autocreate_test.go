@@ -87,11 +87,7 @@ func TestShouldAutoCreate_ExtensionExclude(t *testing.T) {
 	}
 }
 
-func TestShouldAutoCreate_ExtensionAllByDefault(t *testing.T) {
-	z := newBridgeWithZammad("all", "", nil)
-	if !z.ShouldAutoCreate(&CallInformation{Direction: "Inbound", AgentNumber: "anything"}) {
-		t.Fatalf("empty extension mode must allow all")
-	}
+func TestShouldAutoCreate_ExtensionAllIgnoresList(t *testing.T) {
 	z2 := newBridgeWithZammad("all", "all", []string{"100"})
 	if !z2.ShouldAutoCreate(&CallInformation{Direction: "Inbound", AgentNumber: "999"}) {
 		t.Fatalf("mode=all must ignore the list")
@@ -171,5 +167,24 @@ func TestDedupWindow_Plumbing(t *testing.T) {
 	b.SetAutoCreateSettings(AutoCreateSettings{DedupWindowMinutes: 25})
 	if got := b.GetAutoCreateSettings().DedupWindowMinutes; got != 25 {
 		t.Fatalf("after hot-swap: DedupWindowMinutes = %d, want 25", got)
+	}
+}
+
+func TestShouldAutoCreate_UnconfiguredExtensionModeFailsClosed(t *testing.T) {
+	// An unset extension_filter_mode means nobody ever scoped which extensions
+	// may open tickets. On a PBX shared with other business lines that silently
+	// tickets every answered call, so an unset mode must fail closed.
+	z := newBridgeWithZammad("inbound", "", nil)
+	if z.ShouldAutoCreate(&CallInformation{Direction: "Inbound", AgentNumber: "424"}) {
+		t.Fatalf("unset extension mode must fail closed")
+	}
+}
+
+func TestShouldAutoCreate_ExplicitAllStaysPermissive(t *testing.T) {
+	// "all" is a deliberate choice and must stay permissive — only the absence
+	// of a decision fails closed.
+	z := newBridgeWithZammad("inbound", "all", nil)
+	if !z.ShouldAutoCreate(&CallInformation{Direction: "Inbound", AgentNumber: "424"}) {
+		t.Fatalf("explicit mode=all must remain permissive")
 	}
 }

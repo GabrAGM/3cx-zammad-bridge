@@ -53,11 +53,18 @@ func matchesDirection(configured, callDirection string) bool {
 
 // matchesExtension returns true when the configured extension filter permits
 // the given agent extension. An empty list with mode "include" blocks all
-// calls; with mode "exclude" allows all calls.
+// calls; with mode "exclude" allows all calls. An unset mode fails closed.
 func matchesExtension(mode string, list []string, agentNumber string) bool {
 	m := strings.ToLower(strings.TrimSpace(mode))
-	if m == "" || m == "all" {
+	if m == "all" {
 		return true
+	}
+	if m == "" {
+		// No decision was ever recorded about which extensions may open
+		// tickets. Fail closed: on a PBX shared with other business lines a
+		// permissive default tickets every answered call, whoever answered it.
+		// Set the mode explicitly to "all" to opt back into that.
+		return false
 	}
 
 	agent := strings.TrimSpace(agentNumber)

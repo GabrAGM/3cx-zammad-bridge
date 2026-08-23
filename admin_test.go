@@ -385,11 +385,13 @@ func TestAdminSaveRejectsBadDedupWindow(t *testing.T) {
 }
 
 func TestShouldAutoCreateReflectsHotSwap(t *testing.T) {
-	// Start with defaults: all directions, all extensions allowed.
+	// Start permissive on both axes, stated explicitly — an unset extension
+	// mode now fails closed, so "permissive" has to be asked for.
 	bridge := &ZammadBridge{Config: &Config{}}
+	bridge.SetAutoCreateSettings(AutoCreateSettings{Enabled: true, Directions: "all", ExtMode: "all"})
 	call := &CallInformation{Direction: "Outbound", AgentNumber: "908"}
 	if !bridge.ShouldAutoCreate(call) {
-		t.Fatalf("default config should allow the call")
+		t.Fatalf("explicitly permissive config should allow the call")
 	}
 
 	// Hot-swap to inbound-only + exclude 908.

@@ -165,7 +165,7 @@ func TestZammadHangup_AppendsOnRecentDuplicate(t *testing.T) {
 	defer srv.Close()
 
 	z := newTestBridge(srv.URL)
-	z.SetAutoCreateSettings(AutoCreateSettings{Enabled: true, Directions: "all", DedupWindowMinutes: 10})
+	z.SetAutoCreateSettings(AutoCreateSettings{Enabled: true, Directions: "all", ExtMode: "all", DedupWindowMinutes: 10})
 	call := &CallInformation{ExternalNumber: "01223111842", CallFrom: "01223111842", Direction: "Inbound", AgentNumber: "126", ZammadInitialized: true}
 
 	if err := z.ZammadHangup(call, "normalClearing"); err != nil {
@@ -198,7 +198,7 @@ func TestZammadHangup_CreatesWhenNoDuplicate(t *testing.T) {
 	defer srv.Close()
 
 	z := newTestBridge(srv.URL)
-	z.SetAutoCreateSettings(AutoCreateSettings{Enabled: true, Directions: "all", DedupWindowMinutes: 10})
+	z.SetAutoCreateSettings(AutoCreateSettings{Enabled: true, Directions: "all", ExtMode: "all", DedupWindowMinutes: 10})
 	call := &CallInformation{ExternalNumber: "01223111842", CallFrom: "01223111842", Direction: "Inbound", AgentNumber: "126", ZammadInitialized: true}
 
 	if err := z.ZammadHangup(call, "normalClearing"); err != nil {
@@ -228,7 +228,7 @@ func TestZammadHangup_CreatesOnLookupError(t *testing.T) {
 	defer srv.Close()
 
 	z := newTestBridge(srv.URL)
-	z.SetAutoCreateSettings(AutoCreateSettings{Enabled: true, Directions: "all", DedupWindowMinutes: 10})
+	z.SetAutoCreateSettings(AutoCreateSettings{Enabled: true, Directions: "all", ExtMode: "all", DedupWindowMinutes: 10})
 	call := &CallInformation{ExternalNumber: "01223111842", CallFrom: "01223111842", Direction: "Inbound", AgentNumber: "126", ZammadInitialized: true}
 
 	if err := z.ZammadHangup(call, "normalClearing"); err != nil {

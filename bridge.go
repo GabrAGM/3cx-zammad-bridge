@@ -114,6 +114,14 @@ func (z *ZammadBridge) loadAutoCreateFromConfig() {
 		ExtList:            z.Config.Zammad.ExtensionFilter,
 		DedupWindowMinutes: z.Config.Zammad.AutoCreateDedupWindowMinutes,
 	})
+
+	// A fail-closed extension filter is easy to mistake for a broken bridge, so
+	// say so once at boot rather than only per-call at debug level.
+	if z.Config.Zammad.AutoCreateTicket && strings.TrimSpace(z.Config.Zammad.ExtensionFilterMode) == "" {
+		log.Warn().Msg("auto_create_ticket is on but extension_filter_mode is unset: " +
+			"no tickets will be auto-created. Set it to \"include\" with the extensions " +
+			"that should open tickets, or to \"all\" to accept every extension.")
+	}
 }
 
 // NewZammadBridge initializes a new client that listens for 3CX calls and forwards to Zammad.
