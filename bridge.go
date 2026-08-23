@@ -81,7 +81,9 @@ func (z *ZammadBridge) GetExtensions() ([]Extension, error) {
 	if cached := z.extensionCache.Load(); cached != nil {
 		ageNanos := time.Now().UnixNano() - z.extensionCacheAt.Load()
 		if ageNanos < int64(extensionCacheTTL) {
-			return *cached, nil
+			// Copy: callers append placeholder rows, which would otherwise land
+			// in the shared backing array when it has spare capacity.
+			return append([]Extension(nil), (*cached)...), nil
 		}
 	}
 
@@ -93,7 +95,7 @@ func (z *ZammadBridge) GetExtensions() ([]Extension, error) {
 	if err != nil {
 		// Return a stale cache if we have one — better than nothing for the UI.
 		if cached := z.extensionCache.Load(); cached != nil {
-			return *cached, err
+			return append([]Extension(nil), (*cached)...), err
 		}
 		return nil, err
 	}

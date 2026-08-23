@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -75,8 +76,11 @@ type Client3CXPost20 struct {
 
 	client http.Client
 
-	// accessToken is a Bearer-token retrieved after a valid Authentication call. It will expire automatically.
-	accessToken string
+	// accessToken is a Bearer-token retrieved after a valid Authentication call.
+	// It expires automatically. Held in an atomic because the admin UI runs in
+	// its own goroutine (cmd/main.go) and reads it while the Listen loop can be
+	// re-authenticating after a 401/403.
+	accessToken atomic.Value // string
 }
 
 func (z *Client3CXPost20) FetchCalls() ([]CallInformation, error) {
@@ -86,7 +90,7 @@ func (z *Client3CXPost20) FetchCalls() ([]CallInformation, error) {
 		return nil, fmt.Errorf("unable to prepare HTTP request: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+z.accessToken)
+	req.Header.Set("Authorization", "Bearer "+z.getAccessToken())
 
 	resp, err := z.client.Do(req)
 	if err != nil {
@@ -179,7 +183,7 @@ func (z *Client3CXPost20) listenWS() {
 
 	c, _, err := websocket.Dial(ctx, z.Config.Phone3CX.Host+"/callcontrol/ws", &websocket.DialOptions{
 		HTTPHeader: http.Header{
-			"Authorization": []string{"Bearer " + z.accessToken},
+			"Authorization": []string{"Bearer " + z.getAccessToken()},
 		},
 	})
 	if err != nil {
@@ -289,7 +293,7 @@ func httpGET3CX[T any](z *Client3CXPost20, url string) (*T, error) {
 		return nil, fmt.Errorf("unable to prepare HTTP request: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+z.accessToken)
+	req.Header.Set("Authorization", "Bearer "+z.getAccessToken())
 
 	resp, err := z.client.Do(req)
 	if err != nil {
@@ -391,6 +395,21 @@ func (z *Client3CXPost20) getLoginValues() (url.Values, *http.Cookie, error) {
 
 // Authenticate attempts to login to 3CX and stores a token for future API calls. It then loads
 // all extensions we are configured to monitor.
+// getAccessToken / setAccessToken guard the Bearer token, which is written by
+// the Listen goroutine on re-authentication and read by the admin UI goroutine.
+func (z *Client3CXPost20) getAccessToken() string {
+	if v := z.accessToken.Load(); v != nil {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+func (z *Client3CXPost20) setAccessToken(t string) {
+	z.accessToken.Store(t)
+}
+
 func (z *Client3CXPost20) Authenticate() error {
 	values, cookie, err := z.getLoginValues()
 	if err != nil {
@@ -438,7 +457,7 @@ func (z *Client3CXPost20) Authenticate() error {
 		return fmt.Errorf("unable to unmarshal access token: %w", err)
 	}
 
-	z.accessToken = tokenResponse.AccessToken
+	z.setAccessToken(tokenResponse.AccessToken)
 
 	log.Debug().Msg("Successfully authenticated to 3CX")
 
@@ -517,7 +536,7 @@ func (z *Client3CXPost20) fetchUsers(seen map[string]bool) ([]Extension, error) 
 		if err != nil {
 			return nil, fmt.Errorf("unable to prepare HTTP request: %w", err)
 		}
-		req.Header.Set("Authorization", "Bearer "+z.accessToken)
+		req.Header.Set("Authorization", "Bearer "+z.getAccessToken())
 
 		resp, err := z.client.Do(req)
 		if err != nil {
@@ -585,7 +604,7 @@ func (z *Client3CXPost20) fetchNamedGroup(pathSuffix, label string, seen map[str
 		if err != nil {
 			return nil, err
 		}
-		req.Header.Set("Authorization", "Bearer "+z.accessToken)
+		req.Header.Set("Authorization", "Bearer "+z.getAccessToken())
 
 		resp, err := z.client.Do(req)
 		if err != nil {

@@ -23,6 +23,13 @@ jobs:
     - name: Test
       run: go test -v ./...
 
+    # The bridge runs the admin UI in its own goroutine alongside the Listen
+    # loop, so shared state (3CX access token, cached extension directory) is
+    # genuinely concurrent. -race needs cgo, which is not available on every
+    # dev machine, so CI is the place that actually enforces this.
+    - name: Test (race detector)
+      run: go test -race ./...
+
     - name: Linting
       run: |
         go get golang.org/x/tools/cmd/goimports
