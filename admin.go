@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -47,7 +48,7 @@ func StartAdminServer(bridge *ZammadBridge, configPath string) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", basicAuth(cfg, adminIndexHandler(bridge, configPath)))
-	mux.HandleFunc("/save", basicAuth(cfg, adminSaveHandler(bridge, configPath)))
+	mux.HandleFunc("/save", basicAuth(cfg, sameSiteGuard(adminSaveHandler(bridge, configPath))))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
@@ -55,6 +56,35 @@ func StartAdminServer(bridge *ZammadBridge, configPath string) {
 	log.Info().Str("listen", listen).Msg("Admin UI listening")
 	if err := http.ListenAndServe(listen, mux); err != nil {
 		log.Error().Err(err).Msg("Admin UI stopped")
+	}
+}
+
+// sameSiteGuard rejects state-changing requests that the browser tells us came
+// from another site. Basic Auth alone is not CSRF protection: the browser
+// attaches cached credentials to a cross-origin form post, so any page the
+// operator visits could rewrite the bridge's filters and the config on disk.
+//
+// Two signals, both browser-supplied and neither forgeable by page JavaScript:
+//   - Sec-Fetch-Site: reject "cross-site" / "same-site" outright.
+//   - Origin: reject when present and not this host.
+//
+// A request with neither header is allowed: that is curl, an old browser, or
+// the nginx SSO proxy, none of which carry ambient browser credentials the way
+// a cross-origin form post does.
+func sameSiteGuard(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Header.Get("Sec-Fetch-Site") {
+		case "cross-site", "same-site":
+			http.Error(w, "cross-site request rejected", http.StatusForbidden)
+			return
+		}
+		if origin := r.Header.Get("Origin"); origin != "" {
+			if u, err := neturl.Parse(origin); err != nil || u.Host != r.Host {
+				http.Error(w, "cross-origin request rejected", http.StatusForbidden)
+				return
+			}
+		}
+		next(w, r)
 	}
 }
 
@@ -142,7 +172,10 @@ function shuttleMove(fromId, toId, all) {
   const to = document.getElementById(toId);
   const moving = [];
   for (const o of Array.from(from.options)) {
-    if (o.hidden) continue;
+    // "all" means all, including rows the search box is hiding. Skipping them
+    // made "Clear filter list" leave the filtered-out entries behind, and
+    // selectAllInSelected then re-saved them on submit.
+    if (!all && o.hidden) continue;
     if (all || o.selected) moving.push(o);
   }
   for (const o of moving) {
@@ -319,7 +352,7 @@ if (document.readyState === 'loading') {
 
   <div class="actions">
     <button type="submit">Save &amp; apply</button>
-    <span class="footer-meta">Config: <code>{{.ConfigPath}}</code></span>
+    <span class="footer-meta">Config: <code>{{.ConfigPath}}</code> — saving rewrites this file from the fields above; comments and any key this build does not recognise are dropped.</span>
   </div>
 
 </form>

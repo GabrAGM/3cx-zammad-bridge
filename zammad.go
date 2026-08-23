@@ -173,6 +173,13 @@ func (z *ZammadBridge) autoCreateOrAppend(call *CallInformation, cause string, w
 		ticketID, found, err := z.ZammadFindRecentOpenPhoneTicket(call, windowMinutes, time.Now())
 		if err != nil {
 			log.Warn().Err(err).Str("call_id", call.CallUID).Msg("Dedup lookup failed; creating a new ticket")
+		} else if !found {
+			// A configured window that never finds anything is indistinguishable
+			// from a broken search index: the dedup query is Elasticsearch
+			// syntax, and Zammad's SQL fallback (no ES configured) matches
+			// nothing and reports no error. Log it so the two cases differ.
+			log.Debug().Str("call_id", call.CallUID).Int("window_minutes", windowMinutes).
+				Msg("No recent open phone ticket matched; creating a new one (check ES if this never matches)")
 		} else if found {
 			if appendErr := z.ZammadAppendCallArticle(ticketID, call, cause); appendErr != nil {
 				log.Error().Err(appendErr).Int("ticket_id", ticketID).Str("call_id", call.CallUID).

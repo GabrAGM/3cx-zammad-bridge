@@ -472,3 +472,43 @@ func TestAdminIndex_ModeSelectRendersWithoutDirectory(t *testing.T) {
 		t.Fatalf("fallback view (no 3CX directory) renders no extension_filter_mode select; every save would 400")
 	}
 }
+
+// Follow-up 3: /save is a state-changing POST behind Basic Auth only. A page
+// the operator visits can auto-submit a cross-origin form; the browser attaches
+// the cached credentials and the attacker's filter settings are written to the
+// live bridge and to disk. Reject requests that a browser marks as cross-site.
+func TestSameSiteGuard_RejectsCrossSiteFormPost(t *testing.T) {
+	cases := []struct {
+		name    string
+		headers map[string]string
+		want    int
+	}{
+		{"cross-site fetch metadata", map[string]string{"Sec-Fetch-Site": "cross-site"}, http.StatusForbidden},
+		{"same-origin fetch metadata", map[string]string{"Sec-Fetch-Site": "same-origin"}, http.StatusOK},
+		{"no fetch metadata at all", map[string]string{}, http.StatusOK},
+		{"foreign Origin", map[string]string{"Origin": "http://evil.example"}, http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			h := sameSiteGuard(func(w http.ResponseWriter, r *http.Request) { called = true })
+			req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8090/save", nil)
+			req.Host = "127.0.0.1:8090"
+			for k, v := range tc.headers {
+				req.Header.Set(k, v)
+			}
+			rec := httptest.NewRecorder()
+			h(rec, req)
+			if tc.want == http.StatusForbidden {
+				if called {
+					t.Fatalf("%s: handler ran; cross-site POST must be rejected", tc.name)
+				}
+				if rec.Code != http.StatusForbidden {
+					t.Fatalf("%s: got %d, want 403", tc.name, rec.Code)
+				}
+			} else if !called {
+				t.Fatalf("%s: legitimate POST was rejected (%d)", tc.name, rec.Code)
+			}
+		})
+	}
+}
