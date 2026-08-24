@@ -91,6 +91,8 @@ func main() {
 		log.Fatal().Err(err).Msg("Unable to create Zammad bridge")
 	}
 
+	go zammadbridge.StartAdminServer(client, zammadbridge.LoadedConfigPath)
+
 	err = rootCmd.Execute()
 	if err != nil {
 		log.Fatal().Err(err).Msg("Unable to execute command")

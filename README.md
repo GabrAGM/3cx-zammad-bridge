@@ -58,6 +58,45 @@ Zammad:
     log_missed_queue_calls: true # boolean; Whether or not you want to log missed calls to your queue
 ```
 
+## Auto-create tickets
+
+The bridge can automatically create a Zammad ticket (and, if the caller is unknown, a Zammad user) whenever a call ends. Enable this with `auto_create_ticket: true` and set `api_url`, `api_token`, and `ticket_group` under `Zammad:`. Use `auto_create_directions` (`all` | `inbound` | `outbound` | `none`) and the `extension_filter_mode` / `extension_filter` keys to control which calls trigger creation.
+
+**`extension_filter_mode` has no permissive default, on purpose.** If the key is
+absent or empty the bridge auto-creates *nothing* and logs a warning at boot.
+Set it explicitly:
+
+| value | behaviour |
+|---|---|
+| *(absent/empty)* | fail closed — nothing is auto-created |
+| `include` | only extensions listed in `extension_filter` create tickets |
+| `exclude` | every extension **except** those listed creates tickets |
+| `all` | every extension on the PBX creates tickets |
+
+> **Upgrading from a build before this option existed:** a config that does not
+> set `extension_filter_mode` will stop auto-creating tickets after the upgrade.
+> That is deliberate — the previous implicit behaviour was `all`, which on a PBX
+> shared between business lines files a ticket for every answered call company-wide.
+> Add `extension_filter_mode: include` with the extensions that should open
+> tickets (or `all` to keep the old behaviour) before rolling out.
+
+### Admin UI behind a proxy
+
+`Admin.base_path` mounts the UI under a prefix (e.g. `/bridge-admin`) so it can
+sit behind a reverse proxy or load balancer that routes on path but cannot
+rewrite it — an AWS ALB can match `/bridge-admin/*` but forwards the prefix
+intact. The form action is relative, so the prefix carries through to `/save`
+with no further configuration. `/healthz` is served both with and without the
+prefix. Empty (the default) serves at the root, as before.
+
+### Repeat-call consolidation
+
+`auto_create_dedup_window_minutes` (default `0`, off) consolidates repeat calls.
+When a caller who already has a new/open ticket in `ticket_group` calls again
+within the configured number of minutes, the bridge appends the call to that
+ticket instead of creating a new one. Editable live in the admin UI. Lookups
+fail open — if Zammad cannot be queried, a normal ticket is created.
+
 ## Running
  
 Run the release binary to run the daemon. 

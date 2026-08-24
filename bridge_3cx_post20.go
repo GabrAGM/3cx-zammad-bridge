@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -75,8 +76,11 @@ type Client3CXPost20 struct {
 
 	client http.Client
 
-	// accessToken is a Bearer-token retrieved after a valid Authentication call. It will expire automatically.
-	accessToken string
+	// accessToken is a Bearer-token retrieved after a valid Authentication call.
+	// It expires automatically. Held in an atomic because the admin UI runs in
+	// its own goroutine (cmd/main.go) and reads it while the Listen loop can be
+	// re-authenticating after a 401/403.
+	accessToken atomic.Value // string
 }
 
 func (z *Client3CXPost20) FetchCalls() ([]CallInformation, error) {
@@ -86,7 +90,7 @@ func (z *Client3CXPost20) FetchCalls() ([]CallInformation, error) {
 		return nil, fmt.Errorf("unable to prepare HTTP request: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+z.accessToken)
+	req.Header.Set("Authorization", "Bearer "+z.getAccessToken())
 
 	resp, err := z.client.Do(req)
 	if err != nil {
@@ -179,7 +183,7 @@ func (z *Client3CXPost20) listenWS() {
 
 	c, _, err := websocket.Dial(ctx, z.Config.Phone3CX.Host+"/callcontrol/ws", &websocket.DialOptions{
 		HTTPHeader: http.Header{
-			"Authorization": []string{"Bearer " + z.accessToken},
+			"Authorization": []string{"Bearer " + z.getAccessToken()},
 		},
 	})
 	if err != nil {
@@ -289,7 +293,7 @@ func httpGET3CX[T any](z *Client3CXPost20, url string) (*T, error) {
 		return nil, fmt.Errorf("unable to prepare HTTP request: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+z.accessToken)
+	req.Header.Set("Authorization", "Bearer "+z.getAccessToken())
 
 	resp, err := z.client.Do(req)
 	if err != nil {
@@ -391,6 +395,21 @@ func (z *Client3CXPost20) getLoginValues() (url.Values, *http.Cookie, error) {
 
 // Authenticate attempts to login to 3CX and stores a token for future API calls. It then loads
 // all extensions we are configured to monitor.
+// getAccessToken / setAccessToken guard the Bearer token, which is written by
+// the Listen goroutine on re-authentication and read by the admin UI goroutine.
+func (z *Client3CXPost20) getAccessToken() string {
+	if v := z.accessToken.Load(); v != nil {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+func (z *Client3CXPost20) setAccessToken(t string) {
+	z.accessToken.Store(t)
+}
+
 func (z *Client3CXPost20) Authenticate() error {
 	values, cookie, err := z.getLoginValues()
 	if err != nil {
@@ -438,7 +457,7 @@ func (z *Client3CXPost20) Authenticate() error {
 		return fmt.Errorf("unable to unmarshal access token: %w", err)
 	}
 
-	z.accessToken = tokenResponse.AccessToken
+	z.setAccessToken(tokenResponse.AccessToken)
 
 	log.Debug().Msg("Successfully authenticated to 3CX")
 
@@ -473,6 +492,158 @@ func (z *Client3CXPost20) AuthenticateRetry(maxOffline time.Duration) error {
 	}
 
 	return nil
+}
+
+// FetchExtensions returns the full extension directory from 3CX v20's XAPI.
+// It covers users, queues and ring groups — anything that can be the target
+// of a call. Names are "First Last" when available, with a fallback to the
+// raw Number.
+func (z *Client3CXPost20) FetchExtensions() ([]Extension, error) {
+	seen := map[string]bool{}
+	out, err := z.fetchUsers(seen)
+	if err != nil {
+		return nil, err
+	}
+
+	// Queues (e.g. LiveOps Cairo Queue, 908) and ring groups are separate
+	// endpoints in v20 XAPI. Best-effort — a failure here shouldn't block
+	// showing the Users list.
+	if queues, qerr := z.fetchQueues(seen); qerr == nil {
+		out = append(out, queues...)
+	} else {
+		log.Warn().Err(qerr).Msg("Could not fetch 3CX queues for admin picker")
+	}
+	if groups, gerr := z.fetchRingGroups(seen); gerr == nil {
+		out = append(out, groups...)
+	} else {
+		log.Warn().Err(gerr).Msg("Could not fetch 3CX ring groups for admin picker")
+	}
+
+	return out, nil
+}
+
+// fetchUsers pages through /xapi/v1/Users.
+func (z *Client3CXPost20) fetchUsers(seen map[string]bool) ([]Extension, error) {
+	// 3CX v20 XAPI caps $top at 100 per page, so we paginate with $skip until
+	// a page returns fewer than pageSize items. Bounded at 20 pages (2,000
+	// extensions) to protect against misconfigured dial-plans.
+	var out []Extension
+	const pageSize = 100
+	for page := 0; page < 20; page++ {
+		url := fmt.Sprintf("%s/xapi/v1/Users?$select=Number,FirstName,LastName&$top=%d&$skip=%d",
+			z.Config.Phone3CX.Host, pageSize, page*pageSize)
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("unable to prepare HTTP request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+z.getAccessToken())
+
+		resp, err := z.client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("unable to fetch extensions (page %d): %w", page, err)
+		}
+
+		if resp.StatusCode >= 300 {
+			data, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("unexpected response fetching extensions (HTTP %d): %s", resp.StatusCode, string(data))
+		}
+
+		var payload struct {
+			Value []struct {
+				Number    string `json:"Number"`
+				FirstName string `json:"FirstName"`
+				LastName  string `json:"LastName"`
+			} `json:"value"`
+		}
+		err = json.NewDecoder(resp.Body).Decode(&payload)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("unable to parse extensions JSON: %w", err)
+		}
+
+		for _, u := range payload.Value {
+			if u.Number == "" || seen[u.Number] {
+				continue
+			}
+			name := strings.TrimSpace(u.FirstName + " " + u.LastName)
+			if name == "" {
+				name = u.Number
+			}
+			seen[u.Number] = true
+			out = append(out, Extension{Number: u.Number, Name: name})
+		}
+
+		if len(payload.Value) < pageSize {
+			break
+		}
+	}
+	return out, nil
+}
+
+// fetchQueues pulls /xapi/v1/Queues (call queues — aka hunt groups). Names
+// come back in the Name field as a plain string.
+func (z *Client3CXPost20) fetchQueues(seen map[string]bool) ([]Extension, error) {
+	return z.fetchNamedGroup("/xapi/v1/Queues", "queue", seen)
+}
+
+// fetchRingGroups pulls /xapi/v1/RingGroups.
+func (z *Client3CXPost20) fetchRingGroups(seen map[string]bool) ([]Extension, error) {
+	return z.fetchNamedGroup("/xapi/v1/RingGroups", "ring group", seen)
+}
+
+// fetchNamedGroup is the shared pagination loop for 3CX collections that
+// expose a bare Name + Number (queues, ring groups).
+func (z *Client3CXPost20) fetchNamedGroup(pathSuffix, label string, seen map[string]bool) ([]Extension, error) {
+	var out []Extension
+	const pageSize = 100
+	for page := 0; page < 5; page++ {
+		url := fmt.Sprintf("%s%s?$select=Number,Name&$top=%d&$skip=%d",
+			z.Config.Phone3CX.Host, pathSuffix, pageSize, page*pageSize)
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+z.getAccessToken())
+
+		resp, err := z.client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode >= 300 {
+			data, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("%s fetch HTTP %d: %s", label, resp.StatusCode, string(data))
+		}
+
+		var payload struct {
+			Value []struct {
+				Number string `json:"Number"`
+				Name   string `json:"Name"`
+			} `json:"value"`
+		}
+		err = json.NewDecoder(resp.Body).Decode(&payload)
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+
+		for _, q := range payload.Value {
+			if q.Number == "" || seen[q.Number] {
+				continue
+			}
+			name := strings.TrimSpace(q.Name)
+			if name == "" {
+				name = q.Number
+			}
+			seen[q.Number] = true
+			out = append(out, Extension{Number: q.Number, Name: name + " (" + label + ")"})
+		}
+		if len(payload.Value) < pageSize {
+			break
+		}
+	}
+	return out, nil
 }
 
 func (z *Client3CXPost20) IsExtension(_ string) bool {

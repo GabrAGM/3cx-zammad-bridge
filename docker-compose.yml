@@ -5,6 +5,10 @@ services:
     restart: always
     volumes:
       - //e/3cx-zammad-bridge/config.yaml:/etc/3cx-zammad-bridge/config.yaml
+    ports:
+      # Admin UI (only bound to localhost on the host — expose publicly via
+      # a reverse proxy with HTTPS if needed).
+      - "127.0.0.1:8090:8090"
     networks:
       - zammad_default
 

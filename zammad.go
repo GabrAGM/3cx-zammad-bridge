@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -34,6 +36,23 @@ type ZammadUserSearchResult struct {
 
 type ZammadTicketResponse struct {
 	ID int `json:"id"`
+}
+
+// ZammadTicketDetail is the minimal projection of a ticket object as returned
+// by /api/v1/tickets/search (Zammad returns a top-level array of full ticket
+// objects; verified against Zammad 7.0.1).
+type ZammadTicketDetail struct {
+	ID        int    `json:"id"`
+	CreatedAt string `json:"created_at"`
+}
+
+// ZammadArticleAppend is the body for POST /api/v1/ticket_articles.
+type ZammadArticleAppend struct {
+	TicketID int    `json:"ticket_id"`
+	Subject  string `json:"subject"`
+	Body     string `json:"body"`
+	Type     string `json:"type"`
+	Internal bool   `json:"internal"`
 }
 
 type ZammadApiRequest struct {
@@ -128,21 +147,64 @@ func (z *ZammadBridge) ZammadHangup(call *CallInformation, cause string) error {
 		return err
 	}
 
-	// Auto-create ticket if enabled
-	if z.Config.Zammad.AutoCreateTicket && z.Config.Zammad.ApiUrl != "" && z.Config.Zammad.ApiToken != "" {
-		ticketErr := z.ZammadCreateTicket(call, cause)
-		if ticketErr != nil {
-			log.Error().Err(ticketErr).Str("call_id", call.CallUID).Msg("Failed to create Zammad ticket")
+	// Auto-create ticket if enabled and the call passes direction+extension filters
+	settings := z.GetAutoCreateSettings()
+	if settings.Enabled && z.Config.Zammad.ApiUrl != "" && z.Config.Zammad.ApiToken != "" {
+		if z.ShouldAutoCreate(call) {
+			z.autoCreateOrAppend(call, cause, settings.DedupWindowMinutes)
+		} else {
+			log.Debug().
+				Str("call_id", call.CallUID).
+				Str("direction", call.Direction).
+				Str("agent", call.AgentNumber).
+				Msg("Skipping Zammad ticket auto-creation (filtered out by config)")
 		}
 	}
 
 	return nil
 }
 
+// autoCreateOrAppend consolidates a repeat call into a recent open phone ticket
+// when one exists within the dedup window, otherwise creates a new ticket. It
+// fails open: any lookup/append error falls through to ticket creation so a
+// call is never dropped.
+func (z *ZammadBridge) autoCreateOrAppend(call *CallInformation, cause string, windowMinutes int) {
+	if windowMinutes > 0 {
+		ticketID, found, err := z.ZammadFindRecentOpenPhoneTicket(call, windowMinutes, time.Now())
+		if err != nil {
+			log.Warn().Err(err).Str("call_id", call.CallUID).Msg("Dedup lookup failed; creating a new ticket")
+		} else if !found {
+			// A configured window that never finds anything is indistinguishable
+			// from a broken search index: the dedup query is Elasticsearch
+			// syntax, and Zammad's SQL fallback (no ES configured) matches
+			// nothing and reports no error. Log it so the two cases differ.
+			log.Debug().Str("call_id", call.CallUID).Int("window_minutes", windowMinutes).
+				Msg("No recent open phone ticket matched; creating a new one (check ES if this never matches)")
+		} else if found {
+			if appendErr := z.ZammadAppendCallArticle(ticketID, call, cause); appendErr != nil {
+				log.Error().Err(appendErr).Int("ticket_id", ticketID).Str("call_id", call.CallUID).
+					Msg("Failed to append repeat call; creating a new ticket")
+			} else {
+				log.Info().Int("ticket_id", ticketID).Str("call_id", call.CallUID).Bool("appended", true).
+					Msg("Repeat call consolidated into existing open ticket")
+				return
+			}
+		}
+	}
+
+	if ticketErr := z.ZammadCreateTicket(call, cause); ticketErr != nil {
+		log.Error().Err(ticketErr).Str("call_id", call.CallUID).Msg("Failed to create Zammad ticket")
+	}
+}
+
 // ZammadLookupUser searches for a Zammad user by phone number
 func (z *ZammadBridge) ZammadLookupUser(phone string) (int, error) {
-	url := fmt.Sprintf("%s/api/v1/users/search?query=phone:%s&limit=1", z.Config.Zammad.ApiUrl, phone)
-	req, err := http.NewRequest("GET", url, nil)
+	// The number must be escaped: an unescaped leading "+" on an international
+	// caller decodes to a space server-side, so the lookup silently misses.
+	// (Local var is not named `url` so it does not shadow the net/url package.)
+	searchURL := fmt.Sprintf("%s/api/v1/users/search?query=%s&limit=1",
+		z.Config.Zammad.ApiUrl, url.QueryEscape("phone:"+phone))
+	req, err := http.NewRequest("GET", searchURL, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -198,13 +260,110 @@ func (z *ZammadBridge) ZammadCreateUser(phone string) (int, error) {
 	return result.ID, nil
 }
 
-// ZammadCreateTicket creates a ticket in Zammad for the completed call
-func (z *ZammadBridge) ZammadCreateTicket(call *CallInformation, cause string) error {
+// ZammadFindRecentOpenPhoneTicket returns the most recent new/open ticket in
+// the configured phone group whose customer is this call's external number,
+// when it was created within windowMinutes. Returns (0,false,nil) when nothing
+// qualifies and (0,false,err) on any API error so the caller can fail open.
+func (z *ZammadBridge) ZammadFindRecentOpenPhoneTicket(call *CallInformation, windowMinutes int, now time.Time) (int, bool, error) {
+	if windowMinutes <= 0 || call == nil || call.ExternalNumber == "" {
+		return 0, false, nil
+	}
+
+	customerID, err := z.ZammadLookupUser(call.ExternalNumber)
+	if err != nil {
+		return 0, false, err
+	}
+	if customerID == 0 {
+		return 0, false, nil
+	}
+
 	group := z.Config.Zammad.TicketGroup
 	if group == "" {
 		group = "Users"
 	}
+	group = strings.ReplaceAll(group, `"`, `\"`)
 
+	query := fmt.Sprintf(`customer_id:%d AND group.name:"%s" AND (state.name:new OR state.name:open)`, customerID, group)
+	searchURL := fmt.Sprintf("%s/api/v1/tickets/search?query=%s&limit=1&sort_by=created_at&order_by=desc",
+		z.Config.Zammad.ApiUrl, url.QueryEscape(query))
+
+	// Zammad's /tickets/search returns a top-level JSON array of full ticket
+	// objects (verified against Zammad 7.0.1), newest first given order_by=desc.
+	var tickets []ZammadTicketDetail
+	if err := z.zammadGetJSON(searchURL, &tickets); err != nil {
+		return 0, false, err
+	}
+	if len(tickets) == 0 {
+		return 0, false, nil
+	}
+
+	createdAt, err := time.Parse(time.RFC3339, tickets[0].CreatedAt)
+	if err != nil {
+		return 0, false, fmt.Errorf("unable to parse ticket created_at %q: %w", tickets[0].CreatedAt, err)
+	}
+	if withinDedupWindow(createdAt, now, windowMinutes) {
+		return tickets[0].ID, true, nil
+	}
+	return 0, false, nil
+}
+
+// zammadGetJSON performs an authenticated GET and decodes a JSON body.
+func (z *ZammadBridge) zammadGetJSON(rawURL string, out interface{}) error {
+	req, err := http.NewRequest("GET", rawURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Token token="+z.Config.Zammad.ApiToken)
+	resp, err := z.ClientZammad.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("GET %s failed (HTTP %d): %s", rawURL, resp.StatusCode, string(body))
+	}
+	if err := json.Unmarshal(body, out); err != nil {
+		return fmt.Errorf("GET %s: JSON decode failed: %w", rawURL, err)
+	}
+	return nil
+}
+
+// ZammadAppendCallArticle adds the call as a phone article on an existing
+// ticket (used when a repeat call is consolidated).
+func (z *ZammadBridge) ZammadAppendCallArticle(ticketID int, call *CallInformation, cause string) error {
+	callType := callTypeFor(call, cause)
+	article := ZammadArticleAppend{
+		TicketID: ticketID,
+		Subject:  "Phone Call",
+		Body:     "Repeat call (consolidated into this ticket)\n\n" + buildCallBody(call, callType),
+		Type:     "phone",
+		Internal: false,
+	}
+	payload, err := json.Marshal(article)
+	if err != nil {
+		return fmt.Errorf("unable to serialize article JSON: %w", err)
+	}
+	req, err := http.NewRequest("POST", z.Config.Zammad.ApiUrl+"/api/v1/ticket_articles", bytes.NewBuffer(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Token token="+z.Config.Zammad.ApiToken)
+	resp, err := z.ClientZammad.Do(req)
+	if err != nil {
+		return fmt.Errorf("unable to append article: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("article append failed (HTTP %d): %s", resp.StatusCode, string(data))
+	}
+	return nil
+}
+
+// callTypeFor derives the human call-type label from direction + hangup cause.
+func callTypeFor(call *CallInformation, cause string) string {
 	callType := "Inbound"
 	if call.Direction == "Outbound" || call.Direction == "out" {
 		callType = "Outbound"
@@ -212,26 +371,49 @@ func (z *ZammadBridge) ZammadCreateTicket(call *CallInformation, cause string) e
 	if cause == "cancel" || cause == "noAnswer" {
 		callType = "Missed"
 	}
+	return callType
+}
 
-	// Look up customer
-	customerID, _ := z.ZammadLookupUser(call.CallFrom)
-
-	var bodyParts []string
-	bodyParts = append(bodyParts, fmt.Sprintf("Caller: %s", call.CallFrom))
+// buildCallBody renders the call-detail body shared by ticket creation and the
+// repeat-call append article.
+func buildCallBody(call *CallInformation, callType string) string {
+	var parts []string
+	parts = append(parts, fmt.Sprintf("Caller: %s", call.CallFrom))
 	if call.AgentName != "" {
-		bodyParts = append(bodyParts, fmt.Sprintf("Agent: %s (%s)", call.AgentName, call.AgentNumber))
+		parts = append(parts, fmt.Sprintf("Agent: %s (%s)", call.AgentName, call.AgentNumber))
 	} else if call.AgentNumber != "" {
-		bodyParts = append(bodyParts, fmt.Sprintf("Agent: %s", call.AgentNumber))
+		parts = append(parts, fmt.Sprintf("Agent: %s", call.AgentNumber))
 	}
-	bodyParts = append(bodyParts, fmt.Sprintf("Call Type: %s", callType))
-	bodyParts = append(bodyParts, fmt.Sprintf("Direction: %s", call.Direction))
+	parts = append(parts, fmt.Sprintf("Call Type: %s", callType))
+	parts = append(parts, fmt.Sprintf("Direction: %s", call.Direction))
+	return strings.Join(parts, "\n")
+}
+
+// ZammadCreateTicket creates a ticket in Zammad for the completed call
+func (z *ZammadBridge) ZammadCreateTicket(call *CallInformation, cause string) error {
+	group := z.Config.Zammad.TicketGroup
+	if group == "" {
+		group = "Users"
+	}
+
+	callType := callTypeFor(call, cause)
+
+	// Key the customer on the EXTERNAL party, never on CallFrom: ProcessCall
+	// sets CallFrom = AgentNumber for outbound calls, which would mint a
+	// pseudo-customer named after the agent extension — and the dedup lookup
+	// keys on ExternalNumber, so those tickets could never consolidate.
+	customerNumber := call.ExternalNumber
+	if customerNumber == "" {
+		customerNumber = call.CallFrom
+	}
+	customerID, _ := z.ZammadLookupUser(customerNumber)
 
 	ticket := ZammadTicketRequest{
 		Title: fmt.Sprintf("Phone Call from %s (%s)", call.CallFrom, callType),
 		Group: group,
 		Article: ZammadArticleCreate{
 			Subject:  "Phone Call",
-			Body:     strings.Join(bodyParts, "\n"),
+			Body:     buildCallBody(call, callType),
 			Type:     "phone",
 			Internal: false,
 		},
@@ -241,9 +423,9 @@ func (z *ZammadBridge) ZammadCreateTicket(call *CallInformation, cause string) e
 		ticket.CustomerID = customerID
 	} else {
 		// Create customer first
-		newID, createErr := z.ZammadCreateUser(call.CallFrom)
+		newID, createErr := z.ZammadCreateUser(customerNumber)
 		if createErr != nil {
-			log.Warn().Err(createErr).Str("phone", call.CallFrom).Msg("Failed to create Zammad user, using default")
+			log.Warn().Err(createErr).Str("phone", customerNumber).Msg("Failed to create Zammad user, using default")
 			ticket.CustomerID = 1
 		} else {
 			ticket.CustomerID = newID
