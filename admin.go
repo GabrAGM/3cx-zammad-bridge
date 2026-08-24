@@ -46,14 +46,20 @@ func StartAdminServer(bridge *ZammadBridge, configPath string) {
 		listen = ":8090"
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", basicAuth(cfg, adminIndexHandler(bridge, configPath)))
-	mux.HandleFunc("/save", basicAuth(cfg, sameSiteGuard(adminSaveHandler(bridge, configPath))))
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("ok"))
-	})
+	bp := normalizeBasePath(cfg.Admin.BasePath)
 
-	log.Info().Str("listen", listen).Msg("Admin UI listening")
+	mux := http.NewServeMux()
+	mux.HandleFunc(bp+"/", basicAuth(cfg, adminIndexHandler(bridge, configPath, bp)))
+	mux.HandleFunc(bp+"/save", basicAuth(cfg, sameSiteGuard(adminSaveHandler(bridge, configPath))))
+	health := func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) }
+	mux.HandleFunc(bp+"/healthz", health)
+	if bp != "" {
+		// Keep an unprefixed health check so a container/ALB probe does not
+		// have to know the mount point.
+		mux.HandleFunc("/healthz", health)
+	}
+
+	log.Info().Str("listen", listen).Str("base_path", bp+"/").Msg("Admin UI listening")
 	if err := http.ListenAndServe(listen, mux); err != nil {
 		log.Error().Err(err).Msg("Admin UI stopped")
 	}
@@ -71,6 +77,19 @@ func StartAdminServer(bridge *ZammadBridge, configPath string) {
 // A request with neither header is allowed: that is curl, an old browser, or
 // the nginx SSO proxy, none of which carry ambient browser credentials the way
 // a cross-origin form post does.
+// normalizeBasePath turns a configured prefix into either "" or "/prefix":
+// leading slash guaranteed, trailing slash and duplicate slashes removed.
+func normalizeBasePath(p string) string {
+	p = strings.Trim(strings.TrimSpace(p), "/")
+	for strings.Contains(p, "//") {
+		p = strings.ReplaceAll(p, "//", "/")
+	}
+	if p == "" {
+		return ""
+	}
+	return "/" + p
+}
+
 func sameSiteGuard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Header.Get("Sec-Fetch-Site") {
@@ -421,10 +440,13 @@ func viewFromSettings(s AutoCreateSettings, extensions []Extension, extensionsEr
 	}
 }
 
-func adminIndexHandler(bridge *ZammadBridge, configPath string) http.HandlerFunc {
+func adminIndexHandler(bridge *ZammadBridge, configPath, basePath string) http.HandlerFunc {
 	tmpl := template.Must(template.New("admin").Parse(adminTmpl))
+	bp := normalizeBasePath(basePath)
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" && r.URL.Path != "" {
+		// Accept the mount point with or without its trailing slash; reject
+		// anything else so the catch-all pattern does not serve every path.
+		if r.URL.Path != bp+"/" && r.URL.Path != bp && !(bp == "" && r.URL.Path == "") {
 			http.NotFound(w, r)
 			return
 		}

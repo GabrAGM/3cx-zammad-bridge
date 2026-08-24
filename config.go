@@ -35,6 +35,11 @@ type Config struct {
 		// Enabled=true — the server refuses to start otherwise.
 		User string `yaml:"user"`
 		Pass string `yaml:"pass"`
+		// BasePath mounts the UI under a path prefix (e.g. "/bridge-admin")
+		// so it can sit behind a reverse proxy or load balancer that does
+		// path-based routing but cannot rewrite the path — an AWS ALB, for
+		// instance. Empty serves at the root, which is the default.
+		BasePath string `yaml:"base_path"`
 	} `yaml:"Admin"`
 	Zammad struct {
 		Endpoint            string `yaml:"endpoint"`

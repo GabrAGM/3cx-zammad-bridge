@@ -24,6 +24,13 @@ Admin:
   listen: ":8090"
   user: admin
   pass: change-me
+  # Mount the UI under a path prefix so it can sit behind a reverse proxy or
+  # load balancer doing path-based routing. Needed for anything that forwards
+  # a prefix without rewriting it — an AWS ALB, for example, can match
+  # /bridge-admin/* but cannot strip the prefix before forwarding.
+  # Empty (default) serves at the root. /healthz is served both with and
+  # without the prefix so probes need not know it.
+  #base_path: /bridge-admin
 
 Zammad:
   endpoint: https://zammad.example.com/api/v1/cti/secret

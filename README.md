@@ -80,6 +80,15 @@ Set it explicitly:
 > Add `extension_filter_mode: include` with the extensions that should open
 > tickets (or `all` to keep the old behaviour) before rolling out.
 
+### Admin UI behind a proxy
+
+`Admin.base_path` mounts the UI under a prefix (e.g. `/bridge-admin`) so it can
+sit behind a reverse proxy or load balancer that routes on path but cannot
+rewrite it — an AWS ALB can match `/bridge-admin/*` but forwards the prefix
+intact. The form action is relative, so the prefix carries through to `/save`
+with no further configuration. `/healthz` is served both with and without the
+prefix. Empty (the default) serves at the root, as before.
+
 ### Repeat-call consolidation
 
 `auto_create_dedup_window_minutes` (default `0`, off) consolidates repeat calls.

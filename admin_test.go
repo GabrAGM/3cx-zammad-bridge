@@ -195,7 +195,7 @@ func TestAdminIndexRenders(t *testing.T) {
 
 	req := httptest.NewRequest("GET", "/", nil)
 	rec := httptest.NewRecorder()
-	adminIndexHandler(bridge, path)(rec, req)
+	adminIndexHandler(bridge, path, "")(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
@@ -466,7 +466,7 @@ func TestAdminIndex_ModeSelectRendersWithoutDirectory(t *testing.T) {
 	bridge := &ZammadBridge{Config: &Config{}}
 	bridge.SetAutoCreateSettings(AutoCreateSettings{Enabled: true, Directions: "inbound", ExtMode: "exclude", ExtList: []string{"908"}})
 	rec := httptest.NewRecorder()
-	adminIndexHandler(bridge, "/tmp/c.yaml")(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	adminIndexHandler(bridge, "/tmp/c.yaml", "")(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	body := rec.Body.String()
 	if !strings.Contains(body, `name="extension_filter_mode"`) {
 		t.Fatalf("fallback view (no 3CX directory) renders no extension_filter_mode select; every save would 400")
@@ -510,5 +510,45 @@ func TestSameSiteGuard_RejectsCrossSiteFormPost(t *testing.T) {
 				t.Fatalf("%s: legitimate POST was rejected (%d)", tc.name, rec.Code)
 			}
 		})
+	}
+}
+
+func TestNormalizeBasePath(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                  "",
+		"/":                 "",
+		"bridge-admin":      "/bridge-admin",
+		"/bridge-admin":     "/bridge-admin",
+		"/bridge-admin/":    "/bridge-admin",
+		"//bridge-admin//":  "/bridge-admin",
+		"  /bridge-admin  ": "/bridge-admin",
+	} {
+		if got := normalizeBasePath(in); got != want {
+			t.Errorf("normalizeBasePath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// An ALB can forward /bridge-admin/* but cannot rewrite the path, so the admin
+// server has to be mountable under a prefix itself.
+func TestAdminIndexHandler_ServesUnderBasePath(t *testing.T) {
+	bridge := &ZammadBridge{Config: &Config{}}
+	bridge.SetAutoCreateSettings(AutoCreateSettings{Enabled: true, Directions: "inbound", ExtMode: "include", ExtList: []string{"117"}})
+	h := adminIndexHandler(bridge, "/tmp/c.yaml", "/bridge-admin")
+
+	for _, path := range []string{"/bridge-admin/", "/bridge-admin"} {
+		rec := httptest.NewRecorder()
+		h(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s = %d, want 200", path, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), `action="save"`) {
+			t.Errorf("GET %s: form action must stay relative so it posts under the prefix", path)
+		}
+	}
+	rec := httptest.NewRecorder()
+	h(rec, httptest.NewRequest(http.MethodGet, "/somewhere-else", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("GET /somewhere-else = %d, want 404", rec.Code)
 	}
 }
